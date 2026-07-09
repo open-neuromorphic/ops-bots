@@ -1,0 +1,16 @@
+[Unit]
+Description=ONM Discord Bot
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/iguana/Projects/discord-bot
+ExecStart=/home/iguana/Projects/discord-bot/.venv/bin/python3 /home/iguana/Projects/discord-bot/ops/tray_app.py
+Restart=always
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+Environment=DISPLAY=:0
+Environment=PYTHONPATH=/home/iguana/Projects/discord-bot
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,39 @@
+Public Text Channel Topics Report for Server: {{ guild_name }}
+Report Generated: {{ generated_at }}
+============================================================
+
+{% if channels_without_topics %}
+--- ⚠️ Public Channels Missing Topics ---
+Suggestion: Add a topic to these channels to improve clarity and channel discovery.
+
+{% for category, channels in channels_without_topics.items() %}
+Category: {{ category }}
+{% for chan in channels %}
+  - #{{ chan.name }}
+{% endfor %}
+
+{% endfor %}
+{% else %}
+🎉 All scanned public text channels have topics!
+
+{% endif %}
+============================================================
+
+{% if channels_with_topics %}
+--- 📋 Current Public Channel Topics ---
+
+{% for category, channels in channels_with_topics.items() %}
+Category: {{ category }}
+{% for chan in channels %}
+  - #{{ chan.name }}
+    Topic: {{ chan.topic }}
+
+{% endfor %}
+{% endfor %}
+{% endif %}
+--- Scan Summary ---
+Total public text channels scanned: {{ scanned_channels }}
+Channels with topics: {{ with_topics_count }}
+Channels missing topics: {{ without_topics_count }}
+Private/non-viewable channels skipped: {{ skipped_channels }}
+--- End of Report ---

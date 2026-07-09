@@ -1,0 +1,11 @@
+You are synthesizing monthly operational data for: {{ source_key }}.
+
+You must populate the requested JSON schema:
+1. Put a Markdown digest summarizing decisions, blockers, and events into the `markdown_digest` field.
+2. If you detect progress or changes relating to active organizational threads, add them to the `proposed_ledger_updates` array.
+3. CRITICAL INSTRUCTION: Use the Entity Glossary in the context guide to correct any faulty transcriptions of people's names.
+
+{% if guide_text %}
+--- ORGANIZATIONAL CONTEXT GUIDE ---
+{{ guide_text }}
+{% endif %}

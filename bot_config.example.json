@@ -1,0 +1,48 @@
+{
+  "discord": {
+    "guild_id": 123456789012345678,
+    "channels": [
+      {
+        "key": "general",
+        "channel_name": "general",
+        "category_tag": "general"
+      },
+      {
+        "key": "leadership",
+        "channel_name": "leadership-private",
+        "category_tag": "leadership"
+      }
+    ]
+  },
+  "github": {
+    "prod_owner": "your-org",
+    "prod_repo": "your-repo.github.io",
+    "staging_owner": "your-bot-account",
+    "staging_repo": "your-repo.github.io",
+    "onr_staging_owner": "your-org",
+    "onr_staging_repo": "onr-bot",
+    "watch_repos": [
+      {
+        "key": "docs",
+        "owner": "your-org",
+        "repo": "documentation",
+        "modes": ["docs"]
+      }
+    ]
+  },
+  "onr_research": {
+    "target_channel": "research",
+    "reviewers_channel": "research-review",
+    "threshold_upvotes": 1,
+    "poll_interval_hours": 4,
+    "discussion_duration_hours": 24,
+    "proposal_expiration_days": 7,
+    "arxiv_query": "all:neuromorphic OR all:\"spiking neural network\" OR all:\"event-based vision\"",
+    "arxiv_flags": "sortBy=submittedDate&sortOrder=descending"
+  },
+  "pr_automation": {
+    "max_logo_bytes": 5000000,
+    "allowed_logo_types": "image/png,image/jpeg,image/gif,image/webp",
+    "image_fetch_timeout_seconds": 20
+  }
+}
