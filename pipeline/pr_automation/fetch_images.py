@@ -1,5 +1,4 @@
 import re
-import socket
 import ipaddress
 import asyncio
 from urllib.parse import urlparse
@@ -9,7 +8,6 @@ from io import BytesIO
 from PIL import Image, UnidentifiedImageError
 import aiohttp
 
-from services.http import get_session
 import config
 
 MD_IMAGE_RE = re.compile(r'!\[([^\]]*)\]\((https?://[^\s)]+)\)')
@@ -26,6 +24,25 @@ class ImageCandidate(BaseModel):
 
 class ImageDownloadError(Exception):
     pass
+
+
+class SafeSSRFResolver(aiohttp.DefaultResolver):
+    """Custom DNS Resolver to prevent SSRF and DNS Rebinding TOCTOU attacks."""
+
+    async def resolve(self, host: str, port: int, family: int) -> list[dict]:
+        hosts = await super().resolve(host, port, family)
+        safe_hosts = []
+        for h in hosts:
+            try:
+                ip = ipaddress.ip_address(h['host'])
+                if not (ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_reserved):
+                    safe_hosts.append(h)
+            except ValueError:
+                continue
+
+        if not safe_hosts:
+            raise OSError(f"SSRF Attempt detected. No public routable IPs resolved for {host}")
+        return safe_hosts
 
 
 def _extract_from_text(text: str, source_location: str, next_id: int) -> tuple[list[ImageCandidate], int]:
@@ -70,7 +87,6 @@ def _extract_from_text(text: str, source_location: str, next_id: int) -> tuple[l
 
 
 def extract_image_candidates(issue) -> list[ImageCandidate]:
-    """Extracts candidate image URLs from an IssueContext body and its comments."""
     all_candidates, next_id = [], 1
     found, next_id = _extract_from_text(issue.body, "issue_body", next_id)
     all_candidates += found
@@ -80,56 +96,37 @@ def extract_image_candidates(issue) -> list[ImageCandidate]:
     return all_candidates
 
 
-async def _is_safe_host(hostname: str) -> bool:
-    """SSRF guard: reject hosts resolving to private/loopback/link-local ranges."""
-
-    def _resolve():
-        try:
-            return socket.getaddrinfo(hostname, None)
-        except socket.gaierror:
-            return None
-
-    infos = await asyncio.to_thread(_resolve)
-    if not infos:
-        return False
-
-    for info in infos:
-        ip = ipaddress.ip_address(info[4][0])
-        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_reserved:
-            return False
-    return True
-
-
 async def download_image(url: str) -> tuple[bytes, str]:
     parsed = urlparse(url)
     if parsed.scheme not in ("http", "https"):
         raise ImageDownloadError(f"Unsupported scheme: {parsed.scheme}")
 
-    is_safe = await _is_safe_host(parsed.hostname)
-    if not parsed.hostname or not is_safe:
-        raise ImageDownloadError(f"Refusing to fetch disallowed host: {parsed.hostname}")
-
-    session = await get_session()
+    # Enforce safe DNS resolution inside the client session
+    connector = aiohttp.TCPConnector(resolver=SafeSSRFResolver())
     timeout = aiohttp.ClientTimeout(total=config.IMAGE_FETCH_TIMEOUT_SECONDS)
+
     try:
-        async with session.get(url, timeout=timeout, allow_redirects=True, max_redirects=3) as resp:
-            resp.raise_for_status()
-            content_type = resp.headers.get("Content-Type", "").split(";")[0].strip().lower()
-            if content_type not in config.ALLOWED_LOGO_CONTENT_TYPES_SET:
-                raise ImageDownloadError(f"Unexpected content-type: {content_type}")
+        async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
+            async with session.get(url, allow_redirects=True, max_redirects=3) as resp:
+                resp.raise_for_status()
+                content_type = resp.headers.get("Content-Type", "").split(";")[0].strip().lower()
+                if content_type not in config.ALLOWED_LOGO_CONTENT_TYPES_SET:
+                    raise ImageDownloadError(f"Unexpected content-type: {content_type}")
 
-            content_length = resp.headers.get("Content-Length")
-            if content_length and int(content_length) > config.MAX_LOGO_IMAGE_BYTES:
-                raise ImageDownloadError(f"Declared size too large: {content_length} bytes")
+                content_length = resp.headers.get("Content-Length")
+                if content_length and int(content_length) > config.MAX_LOGO_IMAGE_BYTES:
+                    raise ImageDownloadError(f"Declared size too large: {content_length} bytes")
 
-            chunks = bytearray()
-            async for chunk in resp.content.iter_chunked(65536):
-                chunks.extend(chunk)
-                if len(chunks) > config.MAX_LOGO_IMAGE_BYTES:
-                    raise ImageDownloadError("Exceeded size limit while streaming")
-            return bytes(chunks), content_type
+                chunks = bytearray()
+                async for chunk in resp.content.iter_chunked(65536):
+                    chunks.extend(chunk)
+                    if len(chunks) > config.MAX_LOGO_IMAGE_BYTES:
+                        raise ImageDownloadError("Exceeded size limit while streaming")
+                return bytes(chunks), content_type
     except aiohttp.ClientError as e:
         raise ImageDownloadError(f"Network error during fetch: {e}")
+    except OSError as e:
+        raise ImageDownloadError(f"Security block during fetch: {e}")
 
 
 def verify_image_bytes(data: bytes) -> None:

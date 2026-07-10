@@ -1,6 +1,7 @@
 import json
 import logging
 import base64
+import os
 from pydantic import BaseModel, Field
 from datetime import datetime, timezone
 from services.llm import route_with_retry, TaskType
@@ -14,14 +15,12 @@ from services.cache import put as cache_put
 
 logger = logging.getLogger(__name__)
 
-
 class ImageDecision(BaseModel):
     candidate_id: str
     role: str
     confidence: str
     reasoning: str
     target_path: str | None = None
-
 
 class PRDraftResponse(BaseModel):
     target_path: str = Field(
@@ -33,7 +32,6 @@ class PRDraftResponse(BaseModel):
     markdown_content: str = Field(
         description="The FULL raw markdown content for the file, including the YAML frontmatter block.")
 
-
 class ImageAsset(BaseModel):
     target_path: str
     cache_key: str
@@ -41,7 +39,6 @@ class ImageAsset(BaseModel):
     role: str
     content_type: str
     size_bytes: int
-
 
 class ContentDraft(BaseModel):
     issue_ref: str
@@ -57,15 +54,11 @@ class ContentDraft(BaseModel):
     discovered_candidates: list[ImageCandidate] = []
     author_discord_handle: str = "Unknown"
 
-
 async def generate_draft(issue: IssueContext) -> ContentDraft:
-    # 1. Extract candidates
     raw_image_candidates = extract_image_candidates(issue)
-
-    # 2. Phase 3: Pre-fetch images to pass actual vision bytes to the LLM
     valid_candidates = []
     multimodal_data = []
-    prefetched_images = {}  # Map candidate_id -> (bytes, content_type)
+    prefetched_images = {}
     image_warnings = []
 
     for candidate in raw_image_candidates:
@@ -82,7 +75,6 @@ async def generate_draft(issue: IssueContext) -> ContentDraft:
             logger.warning(f"Skipping vision pre-fetch for {candidate.candidate_id}: {e}")
             image_warnings.append(f"Could not load `{candidate.candidate_id}` for vision check: {e}")
 
-    # 3. Build Prompt (Only passing the candidates that successfully downloaded so text/images align perfectly)
     prompt_context = await build_prompt_context(issue, valid_candidates)
 
     if valid_candidates:
@@ -95,7 +87,8 @@ async def generate_draft(issue: IssueContext) -> ContentDraft:
         prompt=prompt_context,
         system=system_prompt,
         response_schema=PRDraftResponse.model_json_schema(),
-        multimodal_data=multimodal_data if multimodal_data else None
+        multimodal_data=multimodal_data if multimodal_data else None,
+        confidential=False
     )
 
     response = await route_with_retry(req, max_attempts=4)
@@ -103,12 +96,15 @@ async def generate_draft(issue: IssueContext) -> ContentDraft:
     try:
         draft_response = PRDraftResponse.model_validate_json(response.content)
 
-        # Enforce content/ prefix
-        if not draft_response.target_path.startswith("content/"):
-            clean_path = draft_response.target_path.lstrip("/")
-            draft_response.target_path = f"content/{clean_path}"
+        clean_path = os.path.normpath(draft_response.target_path.lstrip("/"))
+        if ".." in clean_path or clean_path.startswith("/") or "\\" in clean_path:
+            raise ValueError(f"Security Alert: LLM attempted path traversal: {clean_path}")
 
-        # Enforce Hugo Page Bundle format
+        if not clean_path.startswith("content/"):
+            draft_response.target_path = f"content/{clean_path}"
+        else:
+            draft_response.target_path = clean_path
+
         if not draft_response.target_path.endswith(".md"):
             if not draft_response.target_path.endswith("/"):
                 draft_response.target_path += "/"
@@ -119,13 +115,12 @@ async def generate_draft(issue: IssueContext) -> ContentDraft:
             draft_response.target_path = f"{base}/index.md"
 
     except Exception as e:
-        raise ValueError(f"Failed to parse LLM structured output: {e}\nRaw output:\n{response.content[:500]}...")
+        raise ValueError(f"Failed to parse or secure LLM structured output: {e}\nRaw output:\n{response.content[:500]}...")
 
     ts = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
     draft_id = f"{issue.owner}-{issue.repo}-{issue.number}"
 
     image_assets = []
-
     accepted_candidates = [d for d in draft_response.image_decisions if
                            d.role in ("logo_primary", "logo_dark_variant") and d.confidence in ("high", "medium")]
     seen_roles = set()
@@ -143,7 +138,6 @@ async def generate_draft(issue: IssueContext) -> ContentDraft:
             image_warnings.append(
                 f"Image {decision.candidate_id} was marked unclear/low confidence by vision model. Requires human review.")
 
-    # 4. Cache accepted images using the pre-fetched bytes (No double-downloading)
     candidate_dict = {c.candidate_id: c for c in valid_candidates}
     for decision in filtered_candidates:
         candidate = candidate_dict.get(decision.candidate_id)
