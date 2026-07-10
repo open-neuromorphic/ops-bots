@@ -3,6 +3,7 @@ from discord.ext import commands, tasks
 from discord import app_commands
 import logging
 import urllib.parse
+import re
 from datetime import datetime, timezone, timedelta
 
 import config
@@ -19,6 +20,8 @@ from pipeline.onr.orchestrator import (
 )
 
 logger = logging.getLogger(__name__)
+
+ARXIV_ID_REGEX = re.compile(r"^[0-9]{4}\.[0-9]{4,5}(v[0-9]+)?$|^[a-z\-]+(\.[a-zA-Z]+)?/[0-9]{7}(v[0-9]+)?$")
 
 
 class ManualSubmissionView(discord.ui.View):
@@ -181,20 +184,21 @@ class ONRResearchCog(commands.GroupCog, group_name="onr", group_description="ONR
     @app_commands.command(name="get", description="Test fetching and formatting a paper privately.")
     @app_commands.describe(arxiv_id="Specific arXiv ID (e.g. 2607.00286). Leave blank for latest matching query.")
     async def get_paper(self, interaction: discord.Interaction, arxiv_id: str = None):
+        if arxiv_id and not ARXIV_ID_REGEX.match(arxiv_id):
+            return await interaction.response.send_message("❌ Invalid ArXiv ID format.", ephemeral=True)
+
         await interaction.response.send_message("🔍 Fetching paper data from arXiv...", ephemeral=True)
         try:
             from services.arxiv import fetch_arxiv_feed, scrape_paper_license, verify_open_license
             if not arxiv_id:
                 paper = onr_stats_store.get(
-                    "latest_paper")  # We hijack the store temporarily to look for the cached latest
+                    "latest_paper")
                 if not paper:
                     papers = await fetch_and_filter_new_papers(query=config.ARXIV_CURRENT_QUERY, max_results=15,
                                                                skip_cached=False, save_to_cache=False)
                     if not papers: return await interaction.edit_original_response(
                         content="❌ No open papers found matching the query.")
                     paper = papers[0]
-                    # We store it in stats store just as a generic cache mechanism, though we really should keep stores strictly typed.
-                    # As a temporary test measure we dump the model json manually
                     import services.cache as c
                     c.put("latest_paper.json", paper.model_dump_json(indent=2), subdir="researchbot/onr_stats")
             else:
@@ -263,6 +267,10 @@ class ONRResearchCog(commands.GroupCog, group_name="onr", group_description="ONR
                     content="❌ Please provide a valid `arxiv.org/abs/` URL.")
 
             arxiv_id = arxiv_url.split("/abs/")[-1].split("v")[0]
+
+            if not ARXIV_ID_REGEX.match(arxiv_id):
+                return await interaction.edit_original_response(content="❌ The extracted ArXiv ID is invalid.")
+
             state = onr_stats_store.get(arxiv_id)
 
             if state:
@@ -389,6 +397,9 @@ class ONRResearchCog(commands.GroupCog, group_name="onr", group_description="ONR
     @app_commands.describe(arxiv_id="The arXiv ID of the paper to remove")
     @require_clearance("ec_admin", guild_only=True)
     async def state_rm(self, interaction: discord.Interaction, arxiv_id: str):
+        if not ARXIV_ID_REGEX.match(arxiv_id):
+            return await interaction.response.send_message("❌ Invalid ArXiv ID format.", ephemeral=True)
+
         try:
             onr_stats_store.delete(arxiv_id)
             onr_papers_store.delete(arxiv_id)

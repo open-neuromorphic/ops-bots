@@ -10,6 +10,9 @@ from context_engine.formatter import scan_and_redact
 
 logger = logging.getLogger(__name__)
 
+# Hard ceiling to prevent Out of Memory (OOM) crashes on massively spammed channels
+MAX_HISTORY_MESSAGES = 25000
+
 
 async def fetch_monthly_channel_history(channel_key: str, month_str: str, force_refresh: bool = False,
                                         bot_client: discord.Client = None) -> Path:
@@ -47,7 +50,8 @@ async def fetch_monthly_channel_history(channel_key: str, month_str: str, force_
             raise ValueError(f"Channel #{target_channel_conf.channel_name} not found.")
 
         logger.info(f"Fetching main channel messages for #{target_channel_conf.channel_name}...")
-        async for message in channel.history(after=start_date, before=end_date, limit=None, oldest_first=True):
+        async for message in channel.history(after=start_date, before=end_date, limit=MAX_HISTORY_MESSAGES,
+                                             oldest_first=True):
             if message.author.bot or not message.clean_content.strip(): continue
             safe_content, _ = scan_and_redact(message.clean_content)
             ts = message.created_at.strftime('%Y-%m-%d %H:%M')
@@ -55,7 +59,9 @@ async def fetch_monthly_channel_history(channel_key: str, month_str: str, force_
 
         logger.info(f"Fetching active threads for #{target_channel_conf.channel_name}...")
         for thread in channel.threads:
+            if len(collected) >= MAX_HISTORY_MESSAGES: break
             async for message in thread.history(after=start_date, before=end_date, limit=None, oldest_first=True):
+                if len(collected) >= MAX_HISTORY_MESSAGES: break
                 if message.author.bot or not message.clean_content.strip(): continue
                 safe_content, _ = scan_and_redact(message.clean_content)
                 ts = message.created_at.strftime('%Y-%m-%d %H:%M')
@@ -64,14 +70,20 @@ async def fetch_monthly_channel_history(channel_key: str, month_str: str, force_
 
         logger.info(f"Fetching archived threads for #{target_channel_conf.channel_name}...")
         async for thread in channel.archived_threads(limit=None, before=end_date):
+            if len(collected) >= MAX_HISTORY_MESSAGES: break
             if thread.archive_timestamp and thread.archive_timestamp < start_date:
                 continue
             async for message in thread.history(after=start_date, before=end_date, limit=None, oldest_first=True):
+                if len(collected) >= MAX_HISTORY_MESSAGES: break
                 if message.author.bot or not message.clean_content.strip(): continue
                 safe_content, _ = scan_and_redact(message.clean_content)
                 ts = message.created_at.strftime('%Y-%m-%d %H:%M')
                 collected.append(
                     f"[{ts}] {message.author.display_name} (in thread #{thread.name}): {safe_content}")
+
+        if len(collected) >= MAX_HISTORY_MESSAGES:
+            logger.warning(
+                f"Reached MAX_HISTORY_MESSAGES ({MAX_HISTORY_MESSAGES}) for #{target_channel_conf.channel_name}. History truncated.")
 
         return collected
 
@@ -112,6 +124,9 @@ async def fetch_monthly_channel_history(channel_key: str, month_str: str, force_
     with open(out_path, 'w', encoding='utf-8') as f:
         f.write(f"--- DISCORD LOG: #{target_channel_conf.channel_name} ({month_str}) ---\n\n")
         f.write("\n\n".join(collected_messages))
+        if len(collected_messages) >= MAX_HISTORY_MESSAGES:
+            f.write(
+                "\n\n[SYSTEM WARNING: Maximum message capacity reached. Data truncated to prevent memory exhaustion.]")
         if not collected_messages:
             f.write("*No messages found for this period.*")
 

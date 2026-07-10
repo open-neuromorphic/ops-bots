@@ -31,6 +31,13 @@ class PRAutomationCog(commands.GroupCog, group_name="onm-pr", group_description=
         preview_msg += f"🌐 **Live Staging Preview:** <{preview_url}> *(May take 1-2 mins to build)*\n"
         preview_msg += f"⚙️ **Build Progress:** <{actions_url}>\n\n"
 
+        is_core_file = draft.target_path.endswith("_index.md") or draft.target_path == "content/index.md"
+        if is_core_file:
+            preview_msg += "🚨 **WARNING:** This PR targets a Core Routing/Index file. Review extremely carefully.\n\n"
+
+        preview_msg += "⚠️ **SECURITY WARNING:** This draft was generated from a public GitHub issue.\n"
+        preview_msg += "> **You MUST manually check the GitHub diff before running `/onm-pr approve`** to ensure the submitter did not prompt-inject malicious Markdown (e.g. `<script>` tags) into the site.\n\n"
+
         if draft.image_assets:
             preview_msg += "**🖼️ Images Accepted:**\n"
             for asset in draft.image_assets:
@@ -150,7 +157,6 @@ class PRAutomationCog(commands.GroupCog, group_name="onm-pr", group_description=
             status_msg = await open_production_pr(draft)
             await interaction.edit_original_response(content=status_msg)
 
-            # Cleanup cache
             cache_invalidate(f"{draft_id}.json", subdir="pr_drafts")
             cache_invalidate(f"{draft_id}.md", subdir="pr_drafts")
             for asset in draft.image_assets:
