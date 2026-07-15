@@ -6,7 +6,7 @@ class ContextBuildRequest(BaseModel):
     discord: str = "all"
     transcripts: str = "all"
     github: str = "all"
-    github_mode: str = "docs"
+    github_mode: str = "both"
     since: Optional[str] = None
     dry_run: bool = False
     out: Optional[str] = None

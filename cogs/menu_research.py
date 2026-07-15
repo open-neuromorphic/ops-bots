@@ -13,6 +13,7 @@ from utils.menu_framework import (
     render_screen, MenuButton, update_menu_message
 )
 from utils.menu_caching import fetch_with_cache
+from services.cache import get as cache_get
 from models.onr import ArxivPaper, ONRState
 from pipeline.onr.scraper import fetch_and_filter_new_papers
 from pipeline.onr.orchestrator import onr_stats_store, onr_papers_store
@@ -39,11 +40,27 @@ def _get_number_text(index: int) -> str:
     return f"[ {index + 1} ]"
 
 
+def _resolve_paper(mode: str, payload: str):
+    """Consolidated logic for resolving paper and state depending on module mode."""
+    if mode == "discovery":
+        cached_path = cache_get("recent_papers.json", subdir="menu_data")
+        if cached_path:
+            try:
+                data = CachedPaperList.model_validate_json(cached_path.read_text(encoding="utf-8"))
+                paper = next((p for p in data.papers if p.arxiv_id == payload), None)
+                return paper, None
+            except Exception:
+                pass
+        return None, None
+    else:
+        return onr_papers_store.get(payload), onr_stats_store.get(payload)
+
+
 FILTER_LABELS = {
     "ALL": "All",
-    "PENDING_REVIEW": "Submitted",
+    "SUBMITTED": "Submitted",
     "PROPOSED": "Proposed",
-    "ACTIVE_DISCUSSION": "Active",
+    "ACTIVE": "Active",
     "COMPLETED": "Completed",
     "EXPIRED": "Expired",
     "REJECTED": "Rejected"
@@ -103,9 +120,9 @@ async def render_paper_list(interaction: discord.Interaction, session: MenuSessi
             content += "*No recent open-source papers found matching query.*\n\u200b"
         else:
             for idx, paper in enumerate(page_papers):
-                authors = ", ".join(paper.authors[:2]) + (" et al." if len(paper.authors) > 2 else "")
+                authors = ", ".join(paper.authors)
                 content += f"**{_get_number_text(idx)}** **{paper.title}**\n"
-                content += f"└ 👤 {authors} | 📅 {paper.published_date.split('T')[0]} | 🔗 [arXiv](<{paper.url}>)\n\n"
+                content += f"└ 👥 {authors} | 📅 {paper.published_date.split('T')[0]} | 🔗 [arXiv](<{paper.url}>)\n\n"
             content += "\u200b"
 
         buttons = [
@@ -168,7 +185,7 @@ async def render_paper_list(interaction: discord.Interaction, session: MenuSessi
                 if state.thread_id:
                     link = f"https://discord.com/channels/{guild_id}/{state.thread_id}"
                     link_text = "🔗 Thread"
-                elif state.status in ["pending_review", "rejected"]:
+                elif state.status in ["submitted", "rejected"]:
                     link = f"https://discord.com/channels/{guild_id}/{qa_id}/{state.message_id}"
                     link_text = "🔗 QA Post"
                 else:
@@ -188,7 +205,7 @@ async def render_paper_list(interaction: discord.Interaction, session: MenuSessi
                        disabled=(session.page >= max_page))
         ]
 
-        filters_row_1 = ["ALL", "PENDING_REVIEW", "PROPOSED", "ACTIVE_DISCUSSION"]
+        filters_row_1 = ["ALL", "SUBMITTED", "PROPOSED", "ACTIVE"]
         for f in filters_row_1:
             style = discord.ButtonStyle.primary if session.filter_mode == f else discord.ButtonStyle.secondary
             label_with_count = f"{FILTER_LABELS[f]} ({state_counts[f]})"
@@ -237,17 +254,7 @@ async def handle_view_paper(interaction: discord.Interaction, session: MenuSessi
     if not payload: return
     mode = session.data_context.get("mode", "discovery")
 
-    paper = None
-    state = None
-
-    if mode == "discovery":
-        cached_path = fetch_with_cache.__globals__["cache_get"]("recent_papers.json", subdir="menu_data")
-        if cached_path:
-            data = CachedPaperList.model_validate_json(cached_path.read_text(encoding="utf-8"))
-            paper = next((p for p in data.papers if p.arxiv_id == payload), None)
-    else:
-        paper = onr_papers_store.get(payload)
-        state = onr_stats_store.get(payload)
+    paper, state = _resolve_paper(mode, payload)
 
     if not paper:
         return await interaction.response.send_message("❌ Paper data not found. Cache may have expired.",
@@ -295,7 +302,7 @@ async def handle_submit_paper(interaction: discord.Interaction, session: MenuSes
     onr_cog = interaction.client.get_cog("ONRResearchCog")
     if onr_cog:
         arxiv_url = f"https://arxiv.org/abs/{payload}"
-        interaction.client.loop.create_task(onr_cog.submit.callback(onr_cog, interaction, arxiv_url))
+        interaction.client.loop.create_task(onr_cog.process_manual_submission(interaction, arxiv_url))
 
 
 class ResearchMenuCog(commands.Cog):

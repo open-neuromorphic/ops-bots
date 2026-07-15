@@ -64,6 +64,23 @@ async def run_monthly_digest(source_key: str, month: str, lib: ContextLibrary):
                 text = source_p.read_text(encoding="utf-8")
                 format_type = detect_ec_transcript_format(text)
                 raw_content += f"## {match.title} ({match.date}) [Format: {format_type}]\n{text}\n\n"
+
+        # Inject GitHub Activity for EC Reports
+        if source_key == "ec_transcript":
+            from pipeline.ingest.github_activity import fetch_activity
+            gh_content = ""
+            for repo_conf in config.GITHUB_REPOS:
+                if "activity" in repo_conf.modes:
+                    try:
+                        act_bundle = await fetch_activity(repo_conf.owner, repo_conf.repo, days_closed=30)
+                        if act_bundle.formatted_markdown.strip():
+                            gh_content += f"\n### GitHub Activity: {repo_conf.owner}/{repo_conf.repo}\n{act_bundle.formatted_markdown}\n"
+                    except Exception as e:
+                        logger.error(f"Failed to fetch GitHub activity for digest: {e}")
+
+            if gh_content:
+                raw_content += f"\n## GitHub Project Activity (Last 30 Days)\n{gh_content}\n"
+
     elif source_key.startswith("discord:"):
         channel_key = source_key.split(":")[1]
         cached_path = await fetch_monthly_channel_history(channel_key, month)

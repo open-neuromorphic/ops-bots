@@ -7,11 +7,11 @@ from models.onr import ArxivPaper, ONRState
 from services.state_store import TypedStateStore
 from services.arxiv import format_license_uri
 from pipeline.onr.scraper import fetch_and_filter_new_papers
-from pipeline.onr.handoff import compile_handoff_bundle
+from pipeline.onr.handoff import compile_handoff_bundle, render_discussion_markdown
+from utils.discord_utils import text_to_file
 
 logger = logging.getLogger(__name__)
 
-# Core stores used across the ONR pipeline
 onr_stats_store = TypedStateStore(ONRState, "researchbot/onr_stats")
 onr_papers_store = TypedStateStore(ArxivPaper, "researchbot/onr_papers")
 
@@ -67,33 +67,42 @@ async def run_sync_pipeline(bot: discord.Client) -> tuple[int, int]:
     except Exception as e:
         logger.error(f"Error fetching new arXiv papers: {e}")
 
-    # Emit an aggregated digest index when a batch of papers is newly posted
     if posted_papers:
-        digest_lines = [
-            "📚 **New arXiv Publications Discovered!** 📚",
-            "",
-            "A fresh batch of open-source papers matching our definition has been posted below.",
-            f"React with 🔥 on the original posts if you would like to open a {config.ONR_DISCUSSION_HOURS}-hour community discussion thread!",
-            ""
-        ]
+        embed = discord.Embed(
+            title="📡 New neuromorphic research",
+            description=(
+                f"Click the **\"Jump to Abstract & Vote\"** links below to view details and react with 🔥 to open a {config.ONR_DISCUSSION_HOURS}-hour community discussion thread!\n\n"
+            ),
+            color=discord.Color.teal()
+        )
+
         for paper, msg in posted_papers:
-            authors_str = ", ".join(paper.authors[:2]) + (" et al." if len(paper.authors) > 2 else "")
-            digest_lines.append(f"- **[{paper.title}](<{msg.jump_url}>)** by *{authors_str}*")
+            authors_str = ", ".join(paper.authors)
+            pdf_part = f" | 📄 [Read PDF](<{paper.pdf_url}>)" if paper.pdf_url else ""
 
-        digest_msg = "\n".join(digest_lines)
+            chunk = (
+                f"**{paper.title}**\n"
+                f"👥 *{authors_str}*\n"
+                f"🔗 [Jump to Abstract & Vote](<{msg.jump_url}>){pdf_part}\n\n"
+            )
 
-        # Post summary index to main research channel
+            if len(embed.description) + len(chunk) > 4000:
+                embed.description += "**...and more! (Scroll up to view all papers)**\n"
+                break
+
+            embed.description += chunk
+
         try:
-            await channel.send(digest_msg)
+            await channel.send(embed=embed)
         except Exception as e:
             logger.error(f"Failed to send digest to research channel: {e}")
 
-        # Post copy to moderator channel for validation
         rev_channel = discord.utils.get(guild.text_channels, name=config.ONR_REVIEWERS_CHANNEL)
         if rev_channel:
             try:
                 await rev_channel.send(
-                    f"📢 **arXiv Discovery Batch Digest (Moderator Copy)**\n\n{digest_msg}"
+                    content="*Moderator Copy*",
+                    embed=embed
                 )
             except Exception as e:
                 logger.error(f"Failed to send digest to reviewers channel: {e}")
@@ -136,22 +145,26 @@ async def open_active_thread(state: ONRState, msg: discord.Message, paper: Arxiv
     await thread.send(
         f"💬 **Discussion opened!** You have exactly {config.ONR_DISCUSSION_HOURS} hours to review and discuss this paper. After {config.ONR_DISCUSSION_HOURS} hours, this thread will be locked, logged, and sent to the QA team for website publication.")
 
-    state.status = "active_discussion"
+    state.status = "active"
     state.thread_id = thread.id
     state.thread_created_at = datetime.now(timezone.utc).isoformat()
     state.thumbs_up = fires
     onr_stats_store.put(state.arxiv_id, state)
 
-    # Announce thread activation to the moderation channel
     rev_channel = discord.utils.get(msg.guild.text_channels, name=config.ONR_REVIEWERS_CHANNEL)
     if rev_channel:
         try:
-            await rev_channel.send(
-                f"📢 **A new research discussion thread has opened!**\n"
-                f"**Paper:** *{paper.title}*\n"
-                f"**Discussion Thread:** {thread.mention}\n"
-                f"Come join the conversation and share your thoughts!"
+            announce_embed = discord.Embed(
+                title="📡 New Research Discussion Opened!",
+                description=(
+                    f"**Paper:** *{paper.title}*\n\n"
+                    f"**Discussion Thread:** {thread.mention}\n\n"
+                    f"Come join the conversation and share your thoughts!\n"
+                    f"*(This discussion will be closed and logged after {config.ONR_DISCUSSION_HOURS} hours)*"
+                ),
+                color=discord.Color.teal()
             )
+            await rev_channel.send(embed=announce_embed)
         except Exception as e:
             logger.error(f"Failed to send thread announcement to reviewers channel: {e}")
 
@@ -163,7 +176,7 @@ async def process_state_machine(channel: discord.TextChannel) -> int:
 
     for state in all_states:
         if state.arxiv_id == "latest_paper": continue
-        if state.status in ["completed", "expired", "pending_review", "rejected"]: continue
+        if state.status in ["completed", "expired", "submitted", "rejected"]: continue
 
         try:
             msg = await channel.fetch_message(state.message_id)
@@ -195,7 +208,7 @@ async def process_state_machine(channel: discord.TextChannel) -> int:
                 except Exception as e:
                     logger.warning(f"Could not update expired message UI for {state.arxiv_id}: {e}")
 
-        elif state.status == "active_discussion" and state.thread_created_at:
+        elif state.status == "active" and state.thread_created_at:
             created_dt = datetime.fromisoformat(state.thread_created_at.replace('Z', '+00:00'))
             if now >= created_dt + timedelta(hours=config.ONR_DISCUSSION_HOURS):
                 try:
@@ -209,17 +222,23 @@ async def process_state_machine(channel: discord.TextChannel) -> int:
                     state.participants = list(set([m.author.name for m in user_msgs]))
                     state.thread_messages = len(user_msgs)
 
-                    handoff_path, metrics = compile_handoff_bundle(paper, state, user_msgs)
+                    handoff_path, metrics, discussion_log = compile_handoff_bundle(paper, state, user_msgs)
 
                     rev_channel = discord.utils.get(channel.guild.text_channels, name=config.ONR_REVIEWERS_CHANNEL)
                     if rev_channel:
+                        md_text = render_discussion_markdown(paper, state, metrics, discussion_log)
+                        md_file = text_to_file(md_text, f"{paper.arxiv_id}_discussion.md")
+
                         await rev_channel.send(
-                            f"🚨 **New ONR Handoff Ready!**\n"
-                            f"**Paper:** {paper.title}\n"
-                            f"**Engagement:** {state.thumbs_up} 🔥 | {state.thread_messages} 💬\n"
-                            f"**Projected Tier:** {'🥇' if metrics.onr_tier == 'Gold' else '🥈'} {metrics.onr_tier}\n\n"
-                            f"The {config.ONR_DISCUSSION_HOURS}-hour discussion window has closed. The thread data has been compiled and saved to disk.\n"
-                            f"*(Awaiting LLM synthesis / PR generation pipeline...)*"
+                            content=(
+                                f"🚨 **New ONR Handoff Ready!**\n"
+                                f"**Paper:** {paper.title}\n"
+                                f"**Engagement:** {state.thumbs_up} 🔥 | {state.thread_messages} 💬\n"
+                                f"**Projected Tier:** {'🥇' if metrics.onr_tier == 'Gold' else '🥈'} {metrics.onr_tier}\n\n"
+                                f"The {config.ONR_DISCUSSION_HOURS}-hour discussion window has closed. The thread data has been compiled and saved to disk.\n"
+                                f"*(Awaiting LLM synthesis / PR generation pipeline...)*"
+                            ),
+                            file=md_file
                         )
                     state.status = "completed"
                 except discord.NotFound:

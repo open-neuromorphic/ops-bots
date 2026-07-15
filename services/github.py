@@ -63,6 +63,16 @@ async def fetch_pr_diff(diff_url: str) -> str:
         logger.warning(f"Error fetching diff from {diff_url}: {e}")
         return f"[Could not fetch diff content: {e}]"
 
+async def get_recent_commits(owner: str, repo: str, since_iso: str) -> list[dict]:
+    url = f"https://api.github.com/repos/{owner}/{repo}/commits"
+    headers = _get_headers()
+    params = {"since": since_iso}
+    session = await get_session()
+    async with session.get(url, headers=headers, params=params) as resp:
+        if resp.status == 200:
+            return await resp.json()
+        return []
+
 async def get_issue(owner: str, repo: str, number: int) -> GitHubIssue:
     url = f"https://api.github.com/repos/{owner}/{repo}/issues/{number}"
     headers = _get_headers()

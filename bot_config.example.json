@@ -26,7 +26,7 @@
         "key": "docs",
         "owner": "your-org",
         "repo": "documentation",
-        "modes": ["docs"]
+        "modes": ["docs", "activity"]
       }
     ]
   },

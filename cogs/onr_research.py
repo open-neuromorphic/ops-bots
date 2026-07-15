@@ -38,7 +38,7 @@ class ManualSubmissionView(discord.ui.View):
         arxiv_id = footer_text.split("ArXiv ID: ")[-1].strip()
 
         state = onr_stats_store.get(arxiv_id)
-        if state and state.status != "pending_review":
+        if state and state.status != "submitted":
             return await interaction.response.send_message(
                 f"⚠️ This paper has already been processed (Current status: `{state.status}`).", ephemeral=True)
 
@@ -74,27 +74,6 @@ class ManualSubmissionView(discord.ui.View):
         await interaction.response.edit_message(content=f"❌ Rejected by {interaction.user.mention}.", view=self)
 
 
-class IdentVerificationView(discord.ui.View):
-    def __init__(self, cog):
-        super().__init__(timeout=None)
-        self.cog = cog
-
-    @discord.ui.button(label="Ping ONM Research Mod Team", style=discord.ButtonStyle.primary,
-                       custom_id="onr_ident_ping")
-    async def ping_mods(self, interaction: discord.Interaction, button: discord.ui.Button):
-        guild = interaction.guild
-        rev_channel = discord.utils.get(guild.text_channels, name=config.ONR_REVIEWERS_CHANNEL)
-        if rev_channel:
-            await rev_channel.send(
-                f"🔔 **Identity Verification Request:**\nUser {interaction.user.mention} (`{interaction.user.name}`) has requested to link their real name/socials "
-                f"to their Discord handle for ONR publication credits. Please reach out to them to update the entity glossary."
-            )
-            await interaction.response.send_message(
-                "✅ The mod team has been notified. They will reach out to you shortly!", ephemeral=True)
-        else:
-            await interaction.response.send_message("❌ Error: Reviewers channel not found.", ephemeral=True)
-
-
 class ONRResearchCog(commands.GroupCog, group_name="onr", group_description="ONR Community Paper Listener"):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
@@ -103,7 +82,6 @@ class ONRResearchCog(commands.GroupCog, group_name="onr", group_description="ONR
 
     async def cog_load(self):
         self.bot.add_view(ManualSubmissionView(self))
-        self.bot.add_view(IdentVerificationView(self))
 
     def cog_unload(self):
         self.poll_arxiv_task.cancel()
@@ -154,7 +132,7 @@ class ONRResearchCog(commands.GroupCog, group_name="onr", group_description="ONR
 
             embed = discord.Embed(title="Recent Open-Source Papers", color=discord.Color.blue())
             for p in open_papers:
-                authors = ", ".join(p.authors[:3]) + (" et al." if len(p.authors) > 3 else "")
+                authors = ", ".join(p.authors)
                 desc = (
                     f"**Authors:** {authors}\n"
                     f"**Published:** {format_date_with_days_ago(p.published_date)}\n"
@@ -260,8 +238,11 @@ class ONRResearchCog(commands.GroupCog, group_name="onr", group_description="ONR
     @app_commands.command(name="submit", description="Manually submit an arXiv URL to the ONR Listener pipeline.")
     @app_commands.describe(arxiv_url="The full arXiv abstract URL")
     async def submit(self, interaction: discord.Interaction, arxiv_url: str):
+        await interaction.response.send_message("🔍 Processing and checking license...", ephemeral=True)
+        await self.process_manual_submission(interaction, arxiv_url)
+
+    async def process_manual_submission(self, interaction: discord.Interaction, arxiv_url: str):
         try:
-            await interaction.response.send_message("🔍 Processing and checking license...", ephemeral=True)
             if "arxiv.org/abs/" not in arxiv_url:
                 return await interaction.edit_original_response(
                     content="❌ Please provide a valid `arxiv.org/abs/` URL.")
@@ -275,7 +256,7 @@ class ONRResearchCog(commands.GroupCog, group_name="onr", group_description="ONR
 
             if state:
                 guild_id = config.DISCORD_GUILD_ID
-                if state.status in ["pending_review", "rejected"]:
+                if state.status in ["submitted", "rejected"]:
                     chan = discord.utils.get(interaction.guild.text_channels, name=config.ONR_REVIEWERS_CHANNEL)
                 else:
                     chan = discord.utils.get(interaction.guild.text_channels, name=config.ONR_RESEARCH_CHANNEL)
@@ -284,7 +265,7 @@ class ONRResearchCog(commands.GroupCog, group_name="onr", group_description="ONR
                 msg_link = f"https://discord.com/channels/{guild_id}/{channel_id}/{state.message_id}"
                 thread_link = f"https://discord.com/channels/{guild_id}/{state.thread_id}" if state.thread_id else None
 
-                if state.status == "pending_review":
+                if state.status == "submitted":
                     return await interaction.edit_original_response(
                         content=f"⏳ This paper has already been submitted and is currently awaiting QA review here:\n{msg_link}")
                 elif state.status == "rejected":
@@ -293,7 +274,7 @@ class ONRResearchCog(commands.GroupCog, group_name="onr", group_description="ONR
                 elif state.status == "proposed":
                     return await interaction.edit_original_response(
                         content=f"⚠️ This paper has already been approved and is awaiting votes in the community feed here:\n{msg_link}")
-                elif state.status == "active_discussion":
+                elif state.status == "active":
                     return await interaction.edit_original_response(
                         content=f"💬 This paper is currently being discussed here:\n{thread_link}")
                 elif state.status == "completed":
@@ -337,7 +318,7 @@ class ONRResearchCog(commands.GroupCog, group_name="onr", group_description="ONR
                                             view=view)
 
             new_state = ONRState(
-                arxiv_id=paper.arxiv_id, status="pending_review",
+                arxiv_id=paper.arxiv_id, status="submitted",
                 message_id=qa_msg.id, proposed_at=datetime.now(timezone.utc).isoformat()
             )
             onr_stats_store.put(paper.arxiv_id, new_state)
@@ -345,7 +326,8 @@ class ONRResearchCog(commands.GroupCog, group_name="onr", group_description="ONR
             await interaction.edit_original_response(
                 content=f"✅ Successfully submitted **{paper.title}** to the QA team for review! If approved, it will be posted to the community feed.")
         except Exception as e:
-            await report_error(interaction, e, "Failed to submit paper")
+            logger.error(f"Failed to submit paper: {e}")
+            await interaction.edit_original_response(content=f"❌ Failed to submit paper: {e}")
 
     @app_commands.command(name="report", description="Generate an engagement report for tracked ONR papers.")
     @app_commands.describe(days="How many days back to analyze")
@@ -381,8 +363,7 @@ class ONRResearchCog(commands.GroupCog, group_name="onr", group_description="ONR
     @require_clearance("ec_admin", guild_only=True)
     async def state_list(self, interaction: discord.Interaction):
         all_states = onr_stats_store.list_all()
-        active_states = [s for s in all_states if s.status in ["pending_review", "proposed",
-                                                               "active_discussion"] and s.arxiv_id != "latest_paper"]
+        active_states = [s for s in all_states if s.status in ["submitted", "proposed", "active"] and s.arxiv_id != "latest_paper"]
 
         if not active_states:
             return await interaction.response.send_message("No active ONR states found.", ephemeral=True)
@@ -406,17 +387,6 @@ class ONRResearchCog(commands.GroupCog, group_name="onr", group_description="ONR
             await interaction.response.send_message(f"✅ Removed state and cache for `{arxiv_id}`.", ephemeral=True)
         except Exception as e:
             await report_error(interaction, e, "Failed to remove state")
-
-    @app_commands.command(name="ident",
-                          description="Link your real name or socials to your Discord handle for ONR credits.")
-    async def ident(self, interaction: discord.Interaction):
-        msg = (
-            "**ONR Contributor Identity & Attribution**\n\n"
-            "To ensure you receive proper credit as a contributor in our published materials, we maintain a registry mapping Discord handles to real names and/or social profiles (e.g., GitHub, Twitter/X, LinkedIn).\n\n"
-            "If you would like to be formally acknowledged in ONR releases, please reach out to the ONM Research Mod team to verify and register your identity.\n\n"
-            "Click the button below to ping the mod team and start the process."
-        )
-        await interaction.response.send_message(msg, view=IdentVerificationView(self), ephemeral=True)
 
 
 async def setup(bot: commands.Bot):

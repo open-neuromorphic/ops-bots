@@ -36,8 +36,8 @@ async def fetch_github_content(keys_str: str, mode: str, since_dt: datetime | No
                 logger.warning(f"Error fetching docs for {repo_conf.repo}: {e}")
                 bundle_content.append(f"> ⚠️ Error fetching docs: {e}")
 
-        if mode in ("activity", "both"):
-            days_closed = 7
+        if mode in ("activity", "both") and "activity" in repo_conf.modes:
+            days_closed = 14
             if since_dt:
                 delta = datetime.now(timezone.utc) - since_dt
                 days_closed = max(1, delta.days)
