@@ -33,6 +33,7 @@
   "onr_research": {
     "target_channel": "research",
     "reviewers_channel": "research-review",
+    "digest_channels": ["general", "research"],
     "threshold_upvotes": 1,
     "poll_interval_hours": 4,
     "discussion_duration_hours": 24,

@@ -97,15 +97,16 @@ async def run_sync_pipeline(bot: discord.Client) -> tuple[int, int]:
         except Exception as e:
             logger.error(f"Failed to send digest to research channel: {e}")
 
-        rev_channel = discord.utils.get(guild.text_channels, name=config.ONR_REVIEWERS_CHANNEL)
-        if rev_channel:
-            try:
-                await rev_channel.send(
-                    content="*Moderator Copy*",
-                    embed=embed
-                )
-            except Exception as e:
-                logger.error(f"Failed to send digest to reviewers channel: {e}")
+        for chan_name in config.ONR_DIGEST_CHANNELS:
+            if chan_name == config.ONR_RESEARCH_CHANNEL:
+                continue
+
+            digest_chan = discord.utils.get(guild.text_channels, name=chan_name)
+            if digest_chan:
+                try:
+                    await digest_chan.send(embed=embed)
+                except Exception as e:
+                    logger.error(f"Failed to send digest to {chan_name}: {e}")
 
     updated_count = 0
     try:
@@ -143,7 +144,7 @@ async def open_active_thread(state: ONRState, msg: discord.Message, paper: Arxiv
     thread_name = f"Discussion: {paper.title[:50]}"
     thread = await msg.create_thread(name=thread_name, auto_archive_duration=10080)
     await thread.send(
-        f"💬 **Discussion opened!** You have exactly {config.ONR_DISCUSSION_HOURS} hours to review and discuss this paper. After {config.ONR_DISCUSSION_HOURS} hours, this thread will be locked, logged, and sent to the QA team for website publication.")
+        f"💬 **Discussion opened!** You have exactly {config.ONR_DISCUSSION_HOURS} hours to review and discuss this paper. After {config.ONR_DISCUSSION_HOURS} hours, this thread will be locked, logged, and sent to the moderation team for review.")
 
     state.status = "active"
     state.thread_id = thread.id
@@ -151,22 +152,53 @@ async def open_active_thread(state: ONRState, msg: discord.Message, paper: Arxiv
     state.thumbs_up = fires
     onr_stats_store.put(state.arxiv_id, state)
 
+    announce_embed = discord.Embed(
+        title="📡 New Research Discussion Opened!",
+        description=(
+            f"**Paper:** *{paper.title}*\n\n"
+            f"**Discussion Thread:** {thread.mention}\n\n"
+            f"Come join the conversation and share your thoughts!\n"
+            f"*(This discussion will be closed and logged after {config.ONR_DISCUSSION_HOURS} hours)*"
+        ),
+        color=discord.Color.teal()
+    )
+
     rev_channel = discord.utils.get(msg.guild.text_channels, name=config.ONR_REVIEWERS_CHANNEL)
     if rev_channel:
         try:
-            announce_embed = discord.Embed(
-                title="📡 New Research Discussion Opened!",
-                description=(
-                    f"**Paper:** *{paper.title}*\n\n"
-                    f"**Discussion Thread:** {thread.mention}\n\n"
-                    f"Come join the conversation and share your thoughts!\n"
-                    f"*(This discussion will be closed and logged after {config.ONR_DISCUSSION_HOURS} hours)*"
-                ),
-                color=discord.Color.teal()
-            )
             await rev_channel.send(embed=announce_embed)
         except Exception as e:
             logger.error(f"Failed to send thread announcement to reviewers channel: {e}")
+
+    # Broadcast thread opening to configured CTA digest channels
+    for chan_name in config.ONR_DIGEST_CHANNELS:
+        if chan_name in [config.ONR_RESEARCH_CHANNEL, config.ONR_REVIEWERS_CHANNEL]:
+            continue
+
+        cta_chan = discord.utils.get(msg.guild.text_channels, name=chan_name)
+        if cta_chan:
+            try:
+                await cta_chan.send(embed=announce_embed)
+            except Exception as e:
+                logger.error(f"Failed to send thread announcement to {chan_name}: {e}")
+
+    try:
+        for reaction in msg.reactions:
+            if str(reaction.emoji) == "🔥":
+                async for user in reaction.users():
+                    if not user.bot:
+                        try:
+                            dm_msg = (
+                                f"🔥 **Discussion Opened!**\n"
+                                f"A paper you voted for, **{paper.title}**, has reached the engagement threshold!\n"
+                                f"The community discussion thread is now open for the next {config.ONR_DISCUSSION_HOURS} hours.\n\n"
+                                f"Your input is highly welcomed: {thread.jump_url}"
+                            )
+                            await user.send(dm_msg)
+                        except discord.Forbidden:
+                            logger.debug(f"Could not DM {user.name}, DMs disabled.")
+    except Exception as e:
+        logger.error(f"Error sending DMs to voters for {paper.arxiv_id}: {e}")
 
 
 async def process_state_machine(channel: discord.TextChannel) -> int:
@@ -236,7 +268,7 @@ async def process_state_machine(channel: discord.TextChannel) -> int:
                                 f"**Engagement:** {state.thumbs_up} 🔥 | {state.thread_messages} 💬\n"
                                 f"**Projected Tier:** {'🥇' if metrics.onr_tier == 'Gold' else '🥈'} {metrics.onr_tier}\n\n"
                                 f"The {config.ONR_DISCUSSION_HOURS}-hour discussion window has closed. The thread data has been compiled and saved to disk.\n"
-                                f"*(Awaiting LLM synthesis / PR generation pipeline...)*"
+                                f"*(Awaiting moderation review...)*"
                             ),
                             file=md_file
                         )
