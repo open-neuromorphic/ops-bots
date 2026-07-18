@@ -49,7 +49,6 @@ class Settings(BaseSettings):
     GITHUB_TOKEN: str | None = None
     GITHUB_TOKEN_BOT: str | None = None
 
-    # Defaults replaced with generic placeholders; loaded from bot_config.json
     PROD_REPO_OWNER: str = get_conf("github.prod_owner", "your-org")
     PROD_REPO_NAME: str = get_conf("github.prod_repo", "your-repo.github.io")
     STAGING_REPO_OWNER: str = get_conf("github.staging_owner", "your-bot-account")
@@ -60,7 +59,6 @@ class Settings(BaseSettings):
 
     DISCORD_GUILD_ID: int = get_conf("discord.guild_id", 0)
 
-    # Roles remain secured via .env
     EC_ADMIN_ROLE_IDS: str = ""
     CONTEXT_ENGINE_ALLOWED_ROLE_IDS: str = ""
     VOLUNTEER_TECHNICAL_ROLE_IDS: str = ""
@@ -73,6 +71,7 @@ settings = Settings()
 
 ONR_RESEARCH_CHANNEL: str = get_conf("onr_research.target_channel", "research")
 ONR_REVIEWERS_CHANNEL: str = get_conf("onr_research.reviewers_channel", "research-review")
+ONR_DIGEST_CHANNELS: list[str] = get_conf("onr_research.digest_channels", [])
 ONR_THRESHOLD_UPVOTES: int = get_conf("onr_research.threshold_upvotes", 1)
 ONR_POLL_HOURS: int = get_conf("onr_research.poll_interval_hours", 2)
 ONR_DISCUSSION_HOURS: int = get_conf("onr_research.discussion_duration_hours", 24)
@@ -147,7 +146,6 @@ class GitHubRepoSource(BaseModel):
     modes: tuple[str, ...]
 
 
-# Dynamic loading of organizational architecture from bot_config.json
 _raw_channels = get_conf("discord.channels", [])
 DISCORD_CHANNELS: list[DiscordChannelSource] = [DiscordChannelSource(**c) for c in _raw_channels]
 

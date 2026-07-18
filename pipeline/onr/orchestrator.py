@@ -92,21 +92,18 @@ async def run_sync_pipeline(bot: discord.Client) -> tuple[int, int]:
 
             embed.description += chunk
 
-        try:
-            await channel.send(embed=embed)
-        except Exception as e:
-            logger.error(f"Failed to send digest to research channel: {e}")
-
+        # Strictly broadcast only to configured digest channels, avoiding feed clutter
         for chan_name in config.ONR_DIGEST_CHANNELS:
-            if chan_name == config.ONR_RESEARCH_CHANNEL:
-                continue
-
             digest_chan = discord.utils.get(guild.text_channels, name=chan_name)
             if digest_chan:
                 try:
                     await digest_chan.send(embed=embed)
+                    logger.info(f"Successfully sent daily digest to #{chan_name}")
                 except Exception as e:
-                    logger.error(f"Failed to send digest to {chan_name}: {e}")
+                    logger.error(f"Failed to send digest to #{chan_name}: {e}")
+            else:
+                logger.warning(
+                    f"Digest channel '#{chan_name}' not found. Does the bot have 'View Channel' permission for it?")
 
     updated_count = 0
     try:
