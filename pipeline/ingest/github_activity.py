@@ -4,7 +4,7 @@ from pydantic import BaseModel
 import logging
 import re
 from services.github import search_issues, fetch_pr_diff, get_recent_commits, get_pr_files, get_issue_comments
-from context_engine.formatter import escape_xml, cdata_wrap
+from context_engine.formatter import escape_xml, cdata_wrap, strip_boilerplate
 from services.cache import get as cache_get, put as cache_put
 
 logger = logging.getLogger(__name__)
@@ -30,7 +30,6 @@ async def fetch_activity(owner: str, repo: str, days_closed: int = 30) -> Activi
         tag = "pull_request" if is_pr else "issue"
         tag_id = f"gh:{repo}:{'pr' if is_pr else 'issue'}:{item.number}"
 
-        # Check Local Lookback Cache to prevent API quota starvation for unchanged closed items
         cache_key = f"{tag_id.replace(':', '_')}.xml"
         cached_path = cache_get(cache_key, subdir="github_items")
         use_cache = False
@@ -50,7 +49,9 @@ async def fetch_activity(owner: str, repo: str, days_closed: int = 30) -> Activi
         item_xml = []
         item_xml.append(f'  <{tag} id="{tag_id}" state="{item.state}">')
         item_xml.append(f'    <title>{escape_xml(item.title)}</title>')
-        item_xml.append(f'    <description>{cdata_wrap(item.body)}</description>')
+        # Apply boilerplate stripping to body
+        clean_body = strip_boilerplate(item.body)
+        item_xml.append(f'    <description>{cdata_wrap(clean_body)}</description>')
 
         if is_gov:
             if item.comments > 0:
@@ -58,8 +59,10 @@ async def fetch_activity(owner: str, repo: str, days_closed: int = 30) -> Activi
                 item_xml.append(f'    <comments>')
                 for c in comments:
                     author = escape_xml(c.user.login) if c.user else "Unknown"
+                    # Apply boilerplate stripping to comments
+                    clean_comment = strip_boilerplate(c.body)
                     item_xml.append(f'      <comment author="{author}" timestamp="{c.created_at or ""}">')
-                    item_xml.append(f'        {cdata_wrap(c.body)}')
+                    item_xml.append(f'        {cdata_wrap(clean_comment)}')
                     item_xml.append(f'      </comment>')
                 item_xml.append(f'    </comments>')
 
@@ -82,7 +85,6 @@ async def fetch_activity(owner: str, repo: str, days_closed: int = 30) -> Activi
         item_xml.append(f'  </{tag}>')
         item_xml_str = "\n".join(item_xml)
 
-        # Populate Lookback Cache only if closed (it's safe and static)
         if item.state == "closed":
             cache_put(cache_key, item_xml_str, subdir="github_items")
 
@@ -101,17 +103,3 @@ async def fetch_activity(owner: str, repo: str, days_closed: int = 30) -> Activi
         xml_content.append(f'  </commits>')
 
     return ActivityBundle(owner=owner, repo=repo, xml_content="\n".join(xml_content))
-
-
-async def main():
-    import argparse
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--owner", required=True)
-    parser.add_argument("--repo", required=True)
-    args = parser.parse_args()
-    bundle = await fetch_activity(args.owner, args.repo)
-    logger.info(f"Generated {len(bundle.xml_content)} bytes of activity data for {args.owner}/{args.repo}")
-
-
-if __name__ == "__main__":
-    asyncio.run(main())

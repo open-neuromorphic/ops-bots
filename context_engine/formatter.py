@@ -32,3 +32,17 @@ def strip_empty_templates(content: str, path: str) -> str:
     if "template" in path.lower() and len(content.strip()) < 500:
         return f'<template_reference path="{escape_xml(path)}" status="empty" />'
     return content
+
+def strip_boilerplate(text: str) -> str:
+    """Aggressively removes PR templates, HTML comments, and automated bot injections to save tokens."""
+    if not text: return ""
+    # Strip HTML comments entirely (removes hidden copilot prompts)
+    text = re.sub(r'<!--.*?-->', '', text, flags=re.DOTALL)
+    # Strip the standard PR template intro
+    text = re.sub(r'# 📝 Pull Request Template.*?(?=## 📌)', '', text, flags=re.DOTALL | re.IGNORECASE)
+    # Strip repetitive checklist and empty screenshot sections
+    text = re.sub(r'## ✅ Checklist.*?(?=## |\Z)', '', text, flags=re.DOTALL)
+    text = re.sub(r'## 📸 Screenshots / Attachments \(if applicable\).*?(?=## |\Z)', '', text, flags=re.DOTALL)
+    # Strip Copilot / Bot automated suffixes
+    text = re.sub(r'<!-- START COPILOT CODING AGENT SUFFIX -->.*', '', text, flags=re.DOTALL)
+    return text.strip()

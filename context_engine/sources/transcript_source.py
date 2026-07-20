@@ -1,6 +1,5 @@
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
-import re
 from context_engine.library_index import ContextLibrary
 from context_engine.formatter import escape_xml, cdata_wrap, normalize_crlf
 
@@ -15,7 +14,8 @@ def fetch_transcripts(library: ContextLibrary, tags: str | None, since: str | No
     bundle_content = []
     file_count = 0
     now = datetime.now(timezone.utc)
-    cutoff = (now - timedelta(days=90)).strftime("%Y-%m-%d")
+    # Reduced from 90 days to 30 days to aggressively utilize LLM summaries in hybrid mode
+    cutoff = (now - timedelta(days=30)).strftime("%Y-%m-%d")
 
     for entry in matches:
         if entry.excluded: continue
@@ -41,22 +41,10 @@ def fetch_transcripts(library: ContextLibrary, tags: str | None, since: str | No
 
             if file_path and file_path.exists():
                 content = normalize_crlf(file_path.read_text(encoding="utf-8"))
+
+                # Removed XML node amplification. Use a single CDATA block for the raw transcript to save tokens.
                 bundle_content.append(f'<transcript id="{transcript_id}">')
-
-                parts = re.split(r'\n(?=[A-Za-z0-9 _]+:\s)', "\n" + content.strip())
-                parsed_any = False
-                for p in parts:
-                    p = p.strip()
-                    if not p or p.startswith("--- MEETING METADATA"): continue
-                    m = re.match(r"^([A-Za-z0-9 _]+):\s*(.*)", p, re.DOTALL)
-                    if m:
-                        speaker, text = m.groups()
-                        bundle_content.append(
-                            f'  <message user="{escape_xml(speaker)}">{cdata_wrap(text.strip())}</message>')
-                        parsed_any = True
-
-                if not parsed_any:
-                    bundle_content.append(f'  <raw_log>{cdata_wrap(content)}</raw_log>')
+                bundle_content.append(f'  <raw_transcript>{cdata_wrap(content.strip())}</raw_transcript>')
                 bundle_content.append(f'</transcript>')
                 file_count += 1
 
