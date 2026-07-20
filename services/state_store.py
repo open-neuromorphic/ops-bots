@@ -1,4 +1,5 @@
 import logging
+import asyncio
 from typing import TypeVar, Generic, Optional, List, Type
 from pydantic import BaseModel
 from services.cache import get as cache_get, put as cache_put, invalidate as cache_invalidate, list_keys
@@ -6,6 +7,7 @@ from services.cache import get as cache_get, put as cache_put, invalidate as cac
 logger = logging.getLogger(__name__)
 
 T = TypeVar('T', bound=BaseModel)
+
 
 class TypedStateStore(Generic[T]):
     def __init__(self, model_cls: Type[T], subdir: str):
@@ -25,11 +27,20 @@ class TypedStateStore(Generic[T]):
             logger.error(f"Failed to load state {key} from {self.subdir}: {e}")
             return None
 
+    async def get_async(self, key: str) -> Optional[T]:
+        return await asyncio.to_thread(self.get, key)
+
     def put(self, key: str, obj: T) -> None:
         cache_put(self._get_filename(key), obj.model_dump_json(indent=2), subdir=self.subdir)
 
+    async def put_async(self, key: str, obj: T) -> None:
+        await asyncio.to_thread(self.put, key, obj)
+
     def delete(self, key: str) -> None:
         cache_invalidate(self._get_filename(key), subdir=self.subdir)
+
+    async def delete_async(self, key: str) -> None:
+        await asyncio.to_thread(self.delete, key)
 
     def list_all(self) -> List[T]:
         items = []
@@ -40,3 +51,6 @@ class TypedStateStore(Generic[T]):
                 if obj:
                     items.append(obj)
         return items
+
+    async def list_all_async(self) -> List[T]:
+        return await asyncio.to_thread(self.list_all)

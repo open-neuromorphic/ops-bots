@@ -9,7 +9,7 @@ def fetch_transcripts(library: ContextLibrary, tags: str | None, since: str | No
     str, int]:
     tag_list = tags.split(",") if tags and tags != "all" else None
     matches = library.query(category_tags=tag_list, source_type="meeting_transcript", since=since)
-
+    matches.extend(library.query(category_tags=tag_list, source_type="ec_transcript", since=since))
     if not matches:
         return "", 0
 

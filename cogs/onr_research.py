@@ -4,6 +4,7 @@ from discord import app_commands
 import logging
 import urllib.parse
 import re
+import asyncio
 from datetime import datetime, timezone, timedelta
 
 import config
@@ -37,12 +38,12 @@ class ManualSubmissionView(discord.ui.View):
             return await interaction.response.send_message("❌ Could not extract ArXiv ID from embed.", ephemeral=True)
         arxiv_id = footer_text.split("ArXiv ID: ")[-1].strip()
 
-        state = onr_stats_store.get(arxiv_id)
+        state = await onr_stats_store.get_async(arxiv_id)
         if state and state.status != "submitted":
             return await interaction.response.send_message(
                 f"⚠️ This paper has already been processed (Current status: `{state.status}`).", ephemeral=True)
 
-        paper = onr_papers_store.get(arxiv_id)
+        paper = await onr_papers_store.get_async(arxiv_id)
         if not paper:
             return await interaction.response.send_message("❌ Paper data not found in cache. It may have been purged.",
                                                            ephemeral=True)
@@ -65,10 +66,10 @@ class ManualSubmissionView(discord.ui.View):
         arxiv_id = footer_text.split("ArXiv ID: ")[-1].strip() if "ArXiv ID:" in footer_text else None
 
         if arxiv_id:
-            state = onr_stats_store.get(arxiv_id)
+            state = await onr_stats_store.get_async(arxiv_id)
             if state:
                 state.status = "rejected"
-                onr_stats_store.put(arxiv_id, state)
+                await onr_stats_store.put_async(arxiv_id, state)
 
         for child in self.children: child.disabled = True
         await interaction.response.edit_message(content=f"❌ Rejected by {interaction.user.mention}.", view=self)
@@ -103,7 +104,7 @@ class ONRResearchCog(commands.GroupCog, group_name="onr", group_description="ONR
         channel = guild.get_channel(payload.channel_id)
         if not channel or channel.name != config.ONR_RESEARCH_CHANNEL: return
 
-        all_states = onr_stats_store.list_all()
+        all_states = await onr_stats_store.list_all_async()
         for state in all_states:
             if state.arxiv_id == "latest_paper": continue
             if state.message_id == payload.message_id and state.status == "proposed":
@@ -111,7 +112,7 @@ class ONRResearchCog(commands.GroupCog, group_name="onr", group_description="ONR
                     msg = await channel.fetch_message(payload.message_id)
                     fires = next((r.count - 1 for r in msg.reactions if str(r.emoji) == "🔥"), 0)
                     if fires >= config.ONR_THRESHOLD_UPVOTES:
-                        paper = onr_papers_store.get(state.arxiv_id)
+                        paper = await onr_papers_store.get_async(state.arxiv_id)
                         if paper:
                             await open_active_thread(state, msg, paper, fires)
                 except Exception as e:
@@ -169,8 +170,7 @@ class ONRResearchCog(commands.GroupCog, group_name="onr", group_description="ONR
         try:
             from services.arxiv import fetch_arxiv_feed, scrape_paper_license, verify_open_license
             if not arxiv_id:
-                paper = onr_stats_store.get(
-                    "latest_paper")
+                paper = await onr_stats_store.get_async("latest_paper")
                 if not paper:
                     papers = await fetch_and_filter_new_papers(query=config.ARXIV_CURRENT_QUERY, max_results=15,
                                                                skip_cached=False, save_to_cache=False)
@@ -178,9 +178,9 @@ class ONRResearchCog(commands.GroupCog, group_name="onr", group_description="ONR
                         content="❌ No open papers found matching the query.")
                     paper = papers[0]
                     import services.cache as c
-                    c.put("latest_paper.json", paper.model_dump_json(indent=2), subdir="researchbot/onr_stats")
+                    await asyncio.to_thread(c.put, "latest_paper.json", paper.model_dump_json(indent=2), "researchbot/onr_stats")
             else:
-                paper = onr_papers_store.get(arxiv_id)
+                paper = await onr_papers_store.get_async(arxiv_id)
                 if not paper:
                     raw_papers = await fetch_arxiv_feed(id_list=arxiv_id)
                     if not raw_papers: return await interaction.edit_original_response(
@@ -223,8 +223,8 @@ class ONRResearchCog(commands.GroupCog, group_name="onr", group_description="ONR
         url = f"{config.ARXIV_BASE_URL}?search_query={encoded_query}&{config.ARXIV_CURRENT_FLAGS}&max_results=50"
 
         from services.cache import list_keys
-        papers_in_cache = len(list_keys(subdir="researchbot/onr_papers"))
-        stats_in_cache = len(list_keys(subdir="researchbot/onr_stats"))
+        papers_in_cache = len(await asyncio.to_thread(list_keys, "researchbot/onr_papers"))
+        stats_in_cache = len(await asyncio.to_thread(list_keys, "researchbot/onr_stats"))
 
         msg = (
             f"**ONR Listener Debug**\n**API Target URL:**\n`{url}`\n\n**Query Parameters:**\n"
@@ -252,7 +252,7 @@ class ONRResearchCog(commands.GroupCog, group_name="onr", group_description="ONR
             if not ARXIV_ID_REGEX.match(arxiv_id):
                 return await interaction.edit_original_response(content="❌ The extracted ArXiv ID is invalid.")
 
-            state = onr_stats_store.get(arxiv_id)
+            state = await onr_stats_store.get_async(arxiv_id)
 
             if state:
                 guild_id = config.DISCORD_GUILD_ID
@@ -286,7 +286,7 @@ class ONRResearchCog(commands.GroupCog, group_name="onr", group_description="ONR
 
             papers = await fetch_and_filter_new_papers(id_list=arxiv_id)
             if not papers:
-                paper_data = onr_papers_store.get(arxiv_id)
+                paper_data = await onr_papers_store.get_async(arxiv_id)
                 if paper_data and not paper_data.is_open_license:
                     from services.arxiv import format_license_uri
                     return await interaction.edit_original_response(
@@ -321,7 +321,7 @@ class ONRResearchCog(commands.GroupCog, group_name="onr", group_description="ONR
                 arxiv_id=paper.arxiv_id, status="submitted",
                 message_id=qa_msg.id, proposed_at=datetime.now(timezone.utc).isoformat()
             )
-            onr_stats_store.put(paper.arxiv_id, new_state)
+            await onr_stats_store.put_async(paper.arxiv_id, new_state)
 
             await interaction.edit_original_response(
                 content=f"✅ Successfully submitted **{paper.title}** to the QA team for review! If approved, it will be posted to the community feed.")
@@ -337,7 +337,7 @@ class ONRResearchCog(commands.GroupCog, group_name="onr", group_description="ONR
             await interaction.response.send_message("📊 Compiling engagement report...", ephemeral=True)
             cutoff = datetime.now(timezone.utc) - timedelta(days=days)
 
-            all_states = onr_stats_store.list_all()
+            all_states = await onr_stats_store.list_all_async()
             active_stats = []
             papers_dict = {}
 
@@ -348,7 +348,7 @@ class ONRResearchCog(commands.GroupCog, group_name="onr", group_description="ONR
 
                 if updated_dt >= cutoff:
                     active_stats.append(state)
-                    paper = onr_papers_store.get(state.arxiv_id)
+                    paper = await onr_papers_store.get_async(state.arxiv_id)
                     if paper:
                         papers_dict[state.arxiv_id] = paper
 
@@ -362,7 +362,7 @@ class ONRResearchCog(commands.GroupCog, group_name="onr", group_description="ONR
     @app_commands.command(name="state-list", description="List all active ONR paper states (Admin).")
     @require_clearance("ec_admin", guild_only=True)
     async def state_list(self, interaction: discord.Interaction):
-        all_states = onr_stats_store.list_all()
+        all_states = await onr_stats_store.list_all_async()
         active_states = [s for s in all_states if s.status in ["submitted", "proposed", "active"] and s.arxiv_id != "latest_paper"]
 
         if not active_states:
@@ -382,8 +382,8 @@ class ONRResearchCog(commands.GroupCog, group_name="onr", group_description="ONR
             return await interaction.response.send_message("❌ Invalid ArXiv ID format.", ephemeral=True)
 
         try:
-            onr_stats_store.delete(arxiv_id)
-            onr_papers_store.delete(arxiv_id)
+            await onr_stats_store.delete_async(arxiv_id)
+            await onr_papers_store.delete_async(arxiv_id)
             await interaction.response.send_message(f"✅ Removed state and cache for `{arxiv_id}`.", ephemeral=True)
         except Exception as e:
             await report_error(interaction, e, "Failed to remove state")

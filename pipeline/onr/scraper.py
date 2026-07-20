@@ -23,7 +23,7 @@ async def fetch_and_filter_new_papers(
     for raw in raw_papers:
         arxiv_id = raw["arxiv_id"]
 
-        paper = onr_papers_store.get(arxiv_id)
+        paper = await onr_papers_store.get_async(arxiv_id)
         if paper:
             if skip_cached and not id_list:
                 continue
@@ -44,7 +44,7 @@ async def fetch_and_filter_new_papers(
         )
 
         if save_to_cache:
-            onr_papers_store.put(arxiv_id, paper)
+            await onr_papers_store.put_async(arxiv_id, paper)
 
         if is_open:
             logger.info(f"✅ Approved open license ({license_uri}) for {arxiv_id}")

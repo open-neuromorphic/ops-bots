@@ -1,5 +1,6 @@
 import discord
 import logging
+import asyncio
 from datetime import datetime, timezone, timedelta
 
 import config
@@ -92,7 +93,6 @@ async def run_sync_pipeline(bot: discord.Client) -> tuple[int, int]:
 
             embed.description += chunk
 
-        # Strictly broadcast only to configured digest channels, avoiding feed clutter
         for chan_name in config.ONR_DIGEST_CHANNELS:
             digest_chan = discord.utils.get(guild.text_channels, name=chan_name)
             if digest_chan:
@@ -133,7 +133,7 @@ async def post_paper_to_channel(channel: discord.TextChannel, paper: ArxivPaper)
         arxiv_id=paper.arxiv_id, status="proposed",
         message_id=msg.id, proposed_at=datetime.now(timezone.utc).isoformat()
     )
-    onr_stats_store.put(paper.arxiv_id, state)
+    await onr_stats_store.put_async(paper.arxiv_id, state)
     return msg
 
 
@@ -147,7 +147,7 @@ async def open_active_thread(state: ONRState, msg: discord.Message, paper: Arxiv
     state.thread_id = thread.id
     state.thread_created_at = datetime.now(timezone.utc).isoformat()
     state.thumbs_up = fires
-    onr_stats_store.put(state.arxiv_id, state)
+    await onr_stats_store.put_async(state.arxiv_id, state)
 
     announce_embed = discord.Embed(
         title="📡 New Research Discussion Opened!",
@@ -167,7 +167,6 @@ async def open_active_thread(state: ONRState, msg: discord.Message, paper: Arxiv
         except Exception as e:
             logger.error(f"Failed to send thread announcement to reviewers channel: {e}")
 
-    # Broadcast thread opening to configured CTA digest channels
     for chan_name in config.ONR_DIGEST_CHANNELS:
         if chan_name in [config.ONR_RESEARCH_CHANNEL, config.ONR_REVIEWERS_CHANNEL]:
             continue
@@ -201,7 +200,7 @@ async def open_active_thread(state: ONRState, msg: discord.Message, paper: Arxiv
 async def process_state_machine(channel: discord.TextChannel) -> int:
     processed_count = 0
     now = datetime.now(timezone.utc)
-    all_states = onr_stats_store.list_all()
+    all_states = await onr_stats_store.list_all_async()
 
     for state in all_states:
         if state.arxiv_id == "latest_paper": continue
@@ -214,7 +213,7 @@ async def process_state_machine(channel: discord.TextChannel) -> int:
 
         fires = next((r.count - 1 for r in msg.reactions if str(r.emoji) == "🔥"), 0)
         state.thumbs_up = max(0, fires)
-        paper = onr_papers_store.get(state.arxiv_id)
+        paper = await onr_papers_store.get_async(state.arxiv_id)
         if not paper: continue
 
         if state.status == "proposed":
@@ -223,7 +222,7 @@ async def process_state_machine(channel: discord.TextChannel) -> int:
                 await open_active_thread(state, msg, paper, fires)
             elif now > proposed_dt + timedelta(days=config.ONR_PROPOSAL_DAYS):
                 state.status = "expired"
-                onr_stats_store.put(state.arxiv_id, state)
+                await onr_stats_store.put_async(state.arxiv_id, state)
                 try:
                     kwargs = {
                         "content": "⌛ **Voting window closed.** This paper did not reach the engagement threshold to open a thread."}
@@ -274,8 +273,11 @@ async def process_state_machine(channel: discord.TextChannel) -> int:
                     logger.warning(f"Thread {state.thread_id} missing, marking expired.")
                     state.status = "expired"
 
-                onr_stats_store.put(state.arxiv_id, state)
+                await onr_stats_store.put_async(state.arxiv_id, state)
 
         processed_count += 1
+
+        # Yield to event loop to prevent heartbeat blocking on large cache sizes
+        await asyncio.sleep(0)
 
     return processed_count
