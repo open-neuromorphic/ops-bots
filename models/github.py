@@ -15,6 +15,7 @@ class GitHubIssue(BaseModel):
     user: Optional[GitHubUser] = None
     labels: List[GitHubLabel] = []
     html_url: str
+    updated_at: Optional[str] = None
     closed_at: Optional[str] = None
     comments: int = 0
     pull_request: Optional[Dict[str, Any]] = None
@@ -22,3 +23,4 @@ class GitHubIssue(BaseModel):
 class GitHubComment(BaseModel):
     body: str
     user: GitHubUser
+    created_at: Optional[str] = None

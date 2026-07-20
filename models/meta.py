@@ -33,10 +33,10 @@ class EntityEntry(BaseModel):
     discord_handles: List[str] = []
     fathom_names: List[str] = []
     github_username: Optional[str] = None
+    transcript_aliases: List[str] = []  # Added for SCO v1.6 Semantic normalizations
     role: Optional[str] = None
     notes: Optional[str] = None
     misheard_as: List[str] = []
-    # Phase 4 Identity Additions
     verification_status: VerificationStatus = VerificationStatus.UNVERIFIED
     verification_token: Optional[str] = None
     social_links: Dict[str, str] = Field(default_factory=dict)

@@ -2,8 +2,10 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 from pydantic import BaseModel
 import logging
-from services.github import search_issues, fetch_pr_diff, get_recent_commits
-from models.github import GitHubIssue
+import re
+from services.github import search_issues, fetch_pr_diff, get_recent_commits, get_pr_files, get_issue_comments
+from context_engine.formatter import escape_xml, cdata_wrap
+from services.cache import get as cache_get, put as cache_put
 
 logger = logging.getLogger(__name__)
 
@@ -11,71 +13,94 @@ logger = logging.getLogger(__name__)
 class ActivityBundle(BaseModel):
     owner: str
     repo: str
-    formatted_markdown: str
+    formatted_markdown: str = ""
+    xml_content: str
 
 
-def _format_item(item: GitHubIssue, item_type: str = "Issue") -> str:
-    item_number = item.number
-    item_title = item.title
-    item_author = item.user.login if item.user else 'N/A'
-    item_body = item.body or ""
-    labels = [label.name for label in item.labels]
-
-    content = f"========================================\n"
-    content += f"{item_type} #{item_number}: {item_title}\n"
-    content += f"Author: {item_author}\n"
-    content += f"State: {item.state}\n"
-    if item.state == 'closed':
-        content += f"Closed At: {item.closed_at or 'N/A'}\n"
-    content += f"Labels: {labels}\n"
-    content += f"----------------------------------------\n\n"
-    content += f"{item_body}\n\n"
-    return content
-
-
-async def fetch_activity(owner: str, repo: str, days_closed: int = 7) -> ActivityBundle:
-    full_text_content = ""
-
-    query_open = f"repo:{owner}/{repo} is:open"
-    open_items = await search_issues(query_open)
-
-    if open_items:
-        full_text_content += f"### Currently Open Issues & PRs\n\n"
-        for item in open_items:
-            is_pr = item.pull_request is not None
-            item_type = "Pull Request" if is_pr else "Issue"
-            full_text_content += _format_item(item, item_type)
-
-            if is_pr:
-                diff_url = item.pull_request.get('diff_url') if isinstance(item.pull_request, dict) else None
-                if diff_url:
-                    diff_content = await fetch_pr_diff(diff_url)
-                    full_text_content += f"--- Diff ---\n\n{diff_content}\n\n--- End of Diff ---\n\n"
-            full_text_content += f"========================================\n\n\n"
+async def fetch_activity(owner: str, repo: str, days_closed: int = 30) -> ActivityBundle:
+    xml_content = []
+    is_gov = (repo == "communications")
 
     date_since = (datetime.now(timezone.utc) - timedelta(days=days_closed)).strftime('%Y-%m-%dT%H:%M:%SZ')
+    query = f"repo:{owner}/{repo} updated:>{date_since}"
+    items = await search_issues(query)
+
+    for item in items:
+        is_pr = item.pull_request is not None
+        tag = "pull_request" if is_pr else "issue"
+        tag_id = f"gh:{repo}:{'pr' if is_pr else 'issue'}:{item.number}"
+
+        # Check Local Lookback Cache to prevent API quota starvation for unchanged closed items
+        cache_key = f"{tag_id.replace(':', '_')}.xml"
+        cached_path = cache_get(cache_key, subdir="github_items")
+        use_cache = False
+
+        if cached_path and cached_path.exists():
+            if item.state == 'closed' and item.updated_at:
+                mtime = cached_path.stat().st_mtime
+                updated_ts = datetime.strptime(item.updated_at, "%Y-%m-%dT%H:%M:%SZ").replace(
+                    tzinfo=timezone.utc).timestamp()
+                if mtime > updated_ts:
+                    use_cache = True
+
+        if use_cache:
+            xml_content.append(cached_path.read_text(encoding="utf-8"))
+            continue
+
+        item_xml = []
+        item_xml.append(f'  <{tag} id="{tag_id}" state="{item.state}">')
+        item_xml.append(f'    <title>{escape_xml(item.title)}</title>')
+        item_xml.append(f'    <description>{cdata_wrap(item.body)}</description>')
+
+        if is_gov:
+            if item.comments > 0:
+                comments = await get_issue_comments(owner, repo, item.number)
+                item_xml.append(f'    <comments>')
+                for c in comments:
+                    author = escape_xml(c.user.login) if c.user else "Unknown"
+                    item_xml.append(f'      <comment author="{author}" timestamp="{c.created_at or ""}">')
+                    item_xml.append(f'        {cdata_wrap(c.body)}')
+                    item_xml.append(f'      </comment>')
+                item_xml.append(f'    </comments>')
+
+            if is_pr and item.pull_request:
+                diff_url = item.pull_request.get('diff_url')
+                if diff_url:
+                    diff = await fetch_pr_diff(diff_url)
+                    item_xml.append(f'    <governance_diff>{cdata_wrap(diff)}</governance_diff>')
+        else:
+            if is_pr:
+                files = await get_pr_files(owner, repo, item.number)
+                if files:
+                    item_xml.append(f'    <manifest>')
+                    for f in files:
+                        action = str(f.get('status', 'modified')).upper()
+                        path = escape_xml(f.get('filename', ''))
+                        item_xml.append(f'      <file action="{action}" path="{path}" />')
+                    item_xml.append(f'    </manifest>')
+
+        item_xml.append(f'  </{tag}>')
+        item_xml_str = "\n".join(item_xml)
+
+        # Populate Lookback Cache only if closed (it's safe and static)
+        if item.state == "closed":
+            cache_put(cache_key, item_xml_str, subdir="github_items")
+
+        xml_content.append(item_xml_str)
 
     commits = await get_recent_commits(owner, repo, date_since)
     if commits:
-        full_text_content += f"### Recent Commits (Last {days_closed} days)\n"
-        for c in commits[:20]:
+        xml_content.append(f'  <commits>')
+        for c in commits:
             msg = c['commit']['message'].split('\n')[0]
-            author = c['commit']['author']['name'] if c.get('commit', {}).get('author') else 'Unknown'
-            full_text_content += f"- {c['sha'][:7]}: {msg} (@{author})\n"
-        full_text_content += "\n========================================\n\n"
+            if re.match(r"^Merge (pull request|branch)", msg):
+                continue
+            author = escape_xml(c['commit']['author']['name']) if c.get('commit', {}).get('author') else 'Unknown'
+            sha = escape_xml(c['sha'][:7])
+            xml_content.append(f'    <commit sha="{sha}" author="{author}">{escape_xml(msg)}</commit>')
+        xml_content.append(f'  </commits>')
 
-    query_closed = f"repo:{owner}/{repo} is:closed closed>{date_since}"
-    closed_items = await search_issues(query_closed)
-
-    if closed_items:
-        full_text_content += f"### Recently Closed Issues & Merged PRs\n\n"
-        for item in closed_items:
-            is_pr = item.pull_request is not None
-            item_type = "Pull Request" if is_pr else "Issue"
-            full_text_content += _format_item(item, item_type)
-            full_text_content += f"========================================\n\n\n"
-
-    return ActivityBundle(owner=owner, repo=repo, formatted_markdown=full_text_content)
+    return ActivityBundle(owner=owner, repo=repo, xml_content="\n".join(xml_content))
 
 
 async def main():
@@ -85,7 +110,7 @@ async def main():
     parser.add_argument("--repo", required=True)
     args = parser.parse_args()
     bundle = await fetch_activity(args.owner, args.repo)
-    logger.info(f"Generated {len(bundle.formatted_markdown)} bytes of activity data for {args.owner}/{args.repo}")
+    logger.info(f"Generated {len(bundle.xml_content)} bytes of activity data for {args.owner}/{args.repo}")
 
 
 if __name__ == "__main__":
