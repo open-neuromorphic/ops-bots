@@ -13,6 +13,7 @@ from context_engine.formatter import scan_and_redact, escape_xml
 from models.requests import ContextBuildRequest
 from services.cache import get as cache_get, put as cache_put, is_expired
 from services.github import search_issues
+from services.entity_lookup import resolve_github_author
 
 
 async def _build_active_governance_map() -> str:
@@ -22,14 +23,16 @@ async def _build_active_governance_map() -> str:
         prs = []
         issues = []
         for item in open_issues:
-            author = escape_xml(item.user.login) if item.user else "Unknown"
+            author_raw = item.user.login if item.user else "Unknown"
+            author_resolved = resolve_github_author(author_raw)
             title = escape_xml(item.title)
+
             if item.pull_request:
                 prs.append(
-                    f'    <pull_request ref_id="gh:communications:pr:{item.number}" title="{title}" author="{author}" />')
+                    f'    <pull_request id="gh:communications:pr:{item.number}">\n      <title>{title}</title>\n      <author>{escape_xml(author_resolved)}</author>\n    </pull_request>')
             else:
                 issues.append(
-                    f'    <issue ref_id="gh:communications:issue:{item.number}" title="{title}" author="{author}" />')
+                    f'    <issue id="gh:communications:issue:{item.number}">\n      <title>{title}</title>\n      <author>{escape_xml(author_resolved)}</author>\n    </issue>')
 
         xml.append("  <open_pull_requests>")
         xml.extend(prs)

@@ -4,10 +4,9 @@ import logging
 from config import GITHUB_REPOS
 from pipeline.ingest.github_repo import fetch_markdown
 from pipeline.ingest.github_activity import fetch_activity
-from context_engine.formatter import escape_xml, cdata_wrap, strip_empty_templates, normalize_crlf
+from context_engine.formatter import escape_xml, cdata_wrap, normalize_crlf
 
 logger = logging.getLogger(__name__)
-
 
 async def fetch_github_content(keys_str: str, mode: str, since_dt: datetime | None) -> tuple[str, int]:
     keys = keys_str.split(",") if keys_str and keys_str != "all" else None
@@ -32,11 +31,8 @@ async def fetch_github_content(keys_str: str, mode: str, since_dt: datetime | No
                 repo_content = await fetch_markdown(repo_conf.owner, repo_conf.repo)
                 for path, content in repo_content.markdown_files.items():
                     content = normalize_crlf(content)
-                    content = strip_empty_templates(content, path)
-                    if "<template_reference" in content:
-                        repo_xml.append(f'  {content}')
-                    else:
-                        repo_xml.append(f'  <document path="{escape_xml(path)}">{cdata_wrap(content)}</document>')
+                    is_template = "template" in path.lower()
+                    repo_xml.append(f'  <document path="{escape_xml(path)}" is_template="{str(is_template).lower()}">{cdata_wrap(content)}</document>')
             except Exception as e:
                 logger.warning(f"Error fetching docs for {repo_conf.repo}: {e}")
 

@@ -27,12 +27,6 @@ def cdata_wrap(text: str) -> str:
     if not text: return "<![CDATA[]]>"
     return f"<![CDATA[\n{text.replace(']]>', ']]&gt;')}\n]]>"
 
-def strip_empty_templates(content: str, path: str) -> str:
-    """Substitutes largely empty structural template files with a token-efficient empty XML tag reference."""
-    if "template" in path.lower() and len(content.strip()) < 500:
-        return f'<template_reference path="{escape_xml(path)}" status="empty" />'
-    return content
-
 def strip_boilerplate(text: str) -> str:
     """Aggressively removes PR templates, HTML comments, and automated bot injections to save tokens."""
     if not text: return ""

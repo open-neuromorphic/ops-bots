@@ -7,12 +7,12 @@ from calendar import monthrange
 import logging
 import config
 from context_engine.formatter import scan_and_redact
+from services.entity_lookup import resolve_discord_author
 
 logger = logging.getLogger(__name__)
 
 # Hard ceiling to prevent Out of Memory (OOM) crashes on massively spammed channels
 MAX_HISTORY_MESSAGES = 25000
-
 
 async def fetch_monthly_channel_history(channel_key: str, month_str: str, force_refresh: bool = False,
                                         bot_client: discord.Client = None) -> Path:
@@ -55,7 +55,8 @@ async def fetch_monthly_channel_history(channel_key: str, month_str: str, force_
             if message.author.bot or not message.clean_content.strip(): continue
             safe_content, _ = scan_and_redact(message.clean_content)
             ts = message.created_at.strftime('%Y-%m-%d %H:%M')
-            collected.append(f"[{ts}] {message.author.display_name}: {safe_content}")
+            author_resolved = resolve_discord_author(message.author.name)
+            collected.append(f"[{ts}] {author_resolved}: {safe_content}")
 
         logger.info(f"Fetching active threads for #{target_channel_conf.channel_name}...")
         for thread in channel.threads:
@@ -65,8 +66,8 @@ async def fetch_monthly_channel_history(channel_key: str, month_str: str, force_
                 if message.author.bot or not message.clean_content.strip(): continue
                 safe_content, _ = scan_and_redact(message.clean_content)
                 ts = message.created_at.strftime('%Y-%m-%d %H:%M')
-                collected.append(
-                    f"[{ts}] {message.author.display_name} (in thread #{thread.name}): {safe_content}")
+                author_resolved = resolve_discord_author(message.author.name)
+                collected.append(f"[{ts}] {author_resolved} (in thread #{thread.name}): {safe_content}")
 
         logger.info(f"Fetching archived threads for #{target_channel_conf.channel_name}...")
         async for thread in channel.archived_threads(limit=None, before=end_date):
@@ -78,8 +79,8 @@ async def fetch_monthly_channel_history(channel_key: str, month_str: str, force_
                 if message.author.bot or not message.clean_content.strip(): continue
                 safe_content, _ = scan_and_redact(message.clean_content)
                 ts = message.created_at.strftime('%Y-%m-%d %H:%M')
-                collected.append(
-                    f"[{ts}] {message.author.display_name} (in thread #{thread.name}): {safe_content}")
+                author_resolved = resolve_discord_author(message.author.name)
+                collected.append(f"[{ts}] {author_resolved} (in thread #{thread.name}): {safe_content}")
 
         if len(collected) >= MAX_HISTORY_MESSAGES:
             logger.warning(

@@ -15,6 +15,7 @@ class GitHubIssue(BaseModel):
     user: Optional[GitHubUser] = None
     labels: List[GitHubLabel] = []
     html_url: str
+    created_at: Optional[str] = None
     updated_at: Optional[str] = None
     closed_at: Optional[str] = None
     comments: int = 0
