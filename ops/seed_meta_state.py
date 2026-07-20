@@ -20,16 +20,16 @@ Instead of writing these by hand, you can use a frontier AI model (like Claude 3
 
 ## The Process
 
-1. **Generate your historical archive:** In Discord, run `/onm-context build profile:full deliver:save-only` to generate a comprehensive Markdown dump of your organizational history to the host disk. (Check the `artifacts/bundles/` directory).
+1. **Generate your historical archive:** In Discord, run `/onm-context build profile:full deliver:save-only` to generate a comprehensive XML dump of your organizational history to the host disk. (Check the `artifacts/bundles/` directory).
 2. **Open a Frontier LLM:** Go to ChatGPT, Claude, or Google AI Studio.
-3. **Upload the file:** Attach the `.md` bundle generated in Step 1.
+3. **Upload the file:** Attach the `.xml` bundle generated in Step 1.
 4. **Paste the prompt:** Copy and paste the prompt block below.
 5. **Save the results:** Copy the two JSON code blocks the AI gives you, and save them as `entity_glossary.json` and `threads_ledger.json` in this folder (`~/Documents/onm-library/meta/`).
 
 ---
 ### Copy the text below into the AI:
 
-I am setting up an AI context engine for my organization. Attached is a massive text dump of our recent meeting transcripts, chat logs, and documentation.
+I am setting up an AI context engine for my organization. Attached is a massive XML data dump of our recent meeting transcripts, chat logs, and documentation.
 
 Please analyze this entire document and extract two JSON files for me. Be meticulous about names, aliases, and ongoing projects.
 
@@ -49,6 +49,7 @@ Schema:
     "discord_handles": ["jdoe", "johnny"],
     "fathom_names": ["John Doe", "John D."],
     "github_username": "jdoe_gh",
+    "transcript_aliases": ["Jon Dough", "John Dough"],
     "role": "Their role or title inferred from context",
     "notes": "Brief context about what they do or care about.",
     "misheard_as": ["John Dough", "Jon Dough"]
@@ -97,7 +98,7 @@ def seed_meta():
     print("\n💡 AI BOOTSTRAP GUIDE GENERATED!")
     print(f"We have generated an instruction file and LLM prompt at:\n{guide_p}")
     print("\nHighly Recommended: Follow that guide to have a frontier model automatically")
-    print("generate your glossary and ledger from your historical data before continuing.")
+    print("generate your glossary and ledger from your historical XML data before continuing.")
     print("------------------------------------------------------\n")
 
     # 2. Seed generic fallback Glossary
@@ -115,6 +116,7 @@ def seed_meta():
                 "discord_handles": ["alice", "asmith"],
                 "fathom_names": ["Alice Smith", "Alice"],
                 "github_username": "alicesmith123",
+                "transcript_aliases": ["Alis Smith"],
                 "role": "Project Lead",
                 "notes": "Example entry for the glossary. Replace this file via the bootstrap process.",
                 "misheard_as": ["Alis", "Alex Smith"]

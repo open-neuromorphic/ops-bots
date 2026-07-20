@@ -90,6 +90,16 @@ async def get_issue_comments(owner: str, repo: str, number: int) -> list[GitHubC
         data = await resp.json()
         return [GitHubComment.model_validate(c) for c in data]
 
+async def get_pr_files(owner: str, repo: str, pull_number: int) -> list[dict]:
+    """Fetches the list of files modified in a given Pull Request."""
+    url = f"https://api.github.com/repos/{owner}/{repo}/pulls/{pull_number}/files"
+    headers = _get_headers()
+    session = await get_session()
+    async with session.get(url, headers=headers) as resp:
+        if resp.status == 200:
+            return await resp.json()
+        return []
+
 async def create_github_issue(owner: str, repo: str, title: str, body: str) -> dict:
     url = f"https://api.github.com/repos/{owner}/{repo}/issues"
     headers = _get_bot_headers()
