@@ -10,14 +10,18 @@ def _get_glossary():
 
 
 def normalize_entity(name: str) -> str:
-    """Normalizes spacing, punctuation, and hyphens/underscores for robust matching."""
+    """Normalizes spacing, punctuation, hyphens, and @ symbols for robust matching."""
     if not name:
         return ""
-    name = name.lower()
-    name = name.strip(".,;:!?\"'()[]{}<> \t\n\r")
-    name = name.replace("_", " ").replace("-", " ")
-    # Collapse multiple spaces
-    return re.sub(r'\s+', ' ', name)
+    try:
+        name = str(name).lower()
+        name = name.strip("@.,;:!?\"'()[]{}<> \t\n\r")
+        name = name.replace("_", " ").replace("-", " ")
+        # Collapse multiple spaces
+        return re.sub(r'\s+', ' ', name).strip()
+    except Exception:
+        # Failsafe for unexpected data types
+        return str(name).lower().strip()
 
 
 def _resolve_any(raw_name: str) -> str:

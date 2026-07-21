@@ -4,6 +4,7 @@ from discord import app_commands
 import uuid
 import json
 import logging
+import os
 from pathlib import Path
 import asyncio
 from datetime import datetime, timezone
@@ -45,106 +46,145 @@ def save_queue(queue: list[dict]):
         queue_path.write_text(json.dumps(queue, indent=2), encoding="utf-8")
 
 
-async def render_tabs(interaction: discord.Interaction, session: MenuSession):
+async def handle_main_screen(interaction: discord.Interaction, session: MenuSession, payload: str = None):
     if not interaction.response.is_done():
         await interaction.response.defer(ephemeral=True)
 
-    mode = session.filter_mode
-    content = ""
-    buttons = [
-        ButtonSpec(label="📊 Dashboard", action="set_tab", payload="DASHBOARD",
-                   style=discord.ButtonStyle.primary if mode == "DASHBOARD" else discord.ButtonStyle.secondary, row=0),
-        ButtonSpec(label="⚖️ Review Queue", action="set_tab", payload="REVIEW",
-                   style=discord.ButtonStyle.primary if mode == "REVIEW" else discord.ButtonStyle.secondary, row=0),
-        ButtonSpec(label="⚙️ Settings", action="set_tab", payload="SETTINGS",
-                   style=discord.ButtonStyle.primary if mode == "SETTINGS" else discord.ButtonStyle.secondary, row=0),
-        ButtonSpec(label="❌ Close", action="close_session", style=discord.ButtonStyle.danger, row=0),
-    ]
-
-    if mode == "DASHBOARD":
-        lib = ContextLibrary()
-        entries = lib.query()
-        total_entries = len(entries)
-
-        unsummarized, stale = 0, 0
-        latest_discord_date = "None"
-        discord_dates = []
-
-        for e in entries:
-            if e.source_type == "discord_history":
-                discord_dates.append(e.date)
-            if e.source_type in ["meeting_transcript", "ec_transcript", "discord_history"] and not e.excluded:
-                source_p = Path(e.source_path) if e.source_path else None
-                if source_p and source_p.exists():
-                    if not e.summary_path or not Path(e.summary_path).exists():
-                        unsummarized += 1
-                    elif is_stale(e, source_p):
-                        stale += 1
-
-        if discord_dates:
-            latest_discord_date = max(discord_dates)
-
-        content = "📊 **Context Engine Dashboard**\n\n"
-        content += f"**Total Library Entries:** `{total_entries}`\n"
-        content += f"**Latest Discord Record:** `{latest_discord_date}`\n"
-        content += f"**Unsummarized Documents:** `{unsummarized}`\n"
-        content += f"**Stale Summaries:** `{stale}`\n\n"
-        content += "*Use the controls below to request AI bundles or dispatch the background summarizer.*"
-
-        buttons.extend([
-            ButtonSpec(label="📥 Get Summary Bundle", action="req_bundle", payload="compact",
-                       style=discord.ButtonStyle.success, row=1),
-            ButtonSpec(label="📥 Get Hybrid Bundle", action="req_bundle", payload="hybrid",
-                       style=discord.ButtonStyle.success, row=1),
-            ButtonSpec(label="📥 Get Full Bundle", action="req_bundle", payload="full",
-                       style=discord.ButtonStyle.success, row=1),
-            ButtonSpec(label=f"🤖 Run Summarizer ({unsummarized + stale} pending)", action="run_summarizer",
-                       style=discord.ButtonStyle.primary, row=2, disabled=(unsummarized + stale == 0))
-        ])
-
-    elif mode == "REVIEW":
-        queue = load_queue()
-        if not queue:
-            content = "⚖️ **Human-in-the-Loop Review Queue**\n\n🎉 *No pending AI ledger updates to review! You are all caught up.*"
-        else:
-            item = queue[0]
-            content = "⚖️ **Human-in-the-Loop Review Queue**\n"
-            content += f"*Item 1 of {len(queue)}*\n\n"
-            content += f"**Thread ID:** `{item.get('thread_id')}`\n"
-            content += f"**Proposed Status:** `{item.get('status')}`\n"
-            content += f"**Source Run:** `{item.get('source_run')}`\n"
-            content += f"**History Note:**\n> {item.get('history_note')}\n"
-
-            buttons.extend([
-                ButtonSpec(label="✅ Accept", action="review_action", payload="accept",
-                           style=discord.ButtonStyle.success, row=1),
-                ButtonSpec(label="❌ Reject", action="review_action", payload="reject", style=discord.ButtonStyle.danger,
-                           row=1),
-                ButtonSpec(label="⏭️ Skip", action="review_action", payload="skip", style=discord.ButtonStyle.secondary,
-                           row=1)
-            ])
-
-    elif mode == "SETTINGS":
-        content = "⚙️ **Context Engine Settings**\n\n"
-        content += "Use the control below to run a full system sync. This will pull live Discord activity, update GitHub snapshot documents, and index any local transcript files.\n\n"
-
-        sync_log = session.data_context.get("sync_log")
-        if sync_log:
-            content += f"**Last Sync Result:**\n```text\n{sync_log}\n```"
-
-        buttons.extend([
-            ButtonSpec(label="🔄 Run Full System Sync", action="run_full_sync", style=discord.ButtonStyle.primary, row=1)
-        ])
-
     session.current_screen = "MAIN"
     session_store.put(session.session_id, session)
+
+    queue = load_queue()
+    queue_count = len(queue)
+    queue_label = f"⚖️ Review Queue ({queue_count})" if queue_count > 0 else "⚖️ Review Queue"
+
+    spec = ScreenSpec(
+        content="📊 **Context Engine Control Panel**\n\nSelect a module below to manage the AI library and system state.",
+        buttons=[
+            ButtonSpec(label="📥 Bundles & Summaries", action="nav_bundles", style=discord.ButtonStyle.primary, row=0),
+            ButtonSpec(label=queue_label, action="nav_review", style=discord.ButtonStyle.success if queue_count > 0 else discord.ButtonStyle.secondary, row=0),
+            ButtonSpec(label="⚙️ System Settings", action="nav_settings", style=discord.ButtonStyle.secondary, row=0),
+            ButtonSpec(label="❌ Close", action="close_session", style=discord.ButtonStyle.danger, row=1)
+        ]
+    )
+    await update_menu_message(interaction, spec, render_screen(session, spec))
+
+
+async def handle_nav_bundles(interaction: discord.Interaction, session: MenuSession, payload: str = None):
+    if not interaction.response.is_done():
+        await interaction.response.defer(ephemeral=True)
+
+    session.current_screen = "BUNDLES"
+    session_store.put(session.session_id, session)
+
+    lib = ContextLibrary()
+    entries = lib.query()
+    total_entries = len(entries)
+    unsummarized, stale = 0, 0
+    discord_dates = []
+
+    for e in entries:
+        if e.source_type == "discord_history":
+            discord_dates.append(e.date)
+        if e.source_type in ["meeting_transcript", "ec_transcript", "discord_history"] and not e.excluded:
+            source_p = Path(e.source_path) if e.source_path else None
+            if source_p and source_p.exists():
+                if not e.summary_path or not Path(e.summary_path).exists():
+                    unsummarized += 1
+                elif is_stale(e, source_p):
+                    stale += 1
+
+    latest_discord_date = max(discord_dates) if discord_dates else "None"
+
+    content = "📥 **Bundles & Summaries**\n\n"
+    content += f"**Total Library Entries:** `{total_entries}`\n"
+    content += f"**Latest Discord Record:** `{latest_discord_date}`\n"
+    content += f"**Unsummarized Documents:** `{unsummarized}`\n"
+    content += f"**Stale Summaries:** `{stale}`\n\n"
+
+    buttons = [
+        ButtonSpec(label="◀ Back", action="nav_main", style=discord.ButtonStyle.secondary, row=0),
+        ButtonSpec(label="Compact Bundle", action="req_bundle", payload="compact", style=discord.ButtonStyle.success, row=1),
+        ButtonSpec(label="Hybrid Bundle", action="req_bundle", payload="hybrid", style=discord.ButtonStyle.success, row=1),
+        ButtonSpec(label="Full Bundle", action="req_bundle", payload="full", style=discord.ButtonStyle.success, row=1),
+        ButtonSpec(label=f"🤖 Run Summarizer ({unsummarized + stale})", action="run_summarizer", style=discord.ButtonStyle.primary, row=2, disabled=(unsummarized + stale == 0))
+    ]
     spec = ScreenSpec(content=content, buttons=buttons)
     await update_menu_message(interaction, spec, render_screen(session, spec))
 
 
-async def handle_set_tab(interaction: discord.Interaction, session: MenuSession, payload: str | None = None):
-    session.filter_mode = payload or "DASHBOARD"
-    await render_tabs(interaction, session)
+async def handle_nav_review(interaction: discord.Interaction, session: MenuSession, payload: str = None):
+    if not interaction.response.is_done():
+        await interaction.response.defer(ephemeral=True)
+
+    session.current_screen = "REVIEW"
+    session_store.put(session.session_id, session)
+
+    queue = load_queue()
+    if not queue:
+        content = "⚖️ **Review Queue**\n\n🎉 *No pending AI ledger updates to review! You are all caught up.*"
+        buttons = [ButtonSpec(label="◀ Back", action="nav_main", style=discord.ButtonStyle.secondary, row=0)]
+    else:
+        item = queue[0]
+        content = "⚖️ **Review Queue**\n"
+        content += f"*Item 1 of {len(queue)}*\n\n"
+        content += f"**Thread ID:** `{item.get('thread_id')}`\n"
+        content += f"**Proposed Status:** `{item.get('status')}`\n"
+        content += f"**Source Run:** `{item.get('source_run')}`\n"
+        content += f"**History Note:**\n> {item.get('history_note')}\n"
+
+        buttons = [
+            ButtonSpec(label="◀ Back", action="nav_main", style=discord.ButtonStyle.secondary, row=0),
+            ButtonSpec(label="✅ Accept", action="review_action", payload="accept", style=discord.ButtonStyle.success, row=1),
+            ButtonSpec(label="❌ Reject", action="review_action", payload="reject", style=discord.ButtonStyle.danger, row=1),
+            ButtonSpec(label="⏭️ Skip", action="review_action", payload="skip", style=discord.ButtonStyle.secondary, row=1)
+        ]
+
+    spec = ScreenSpec(content=content, buttons=buttons)
+    await update_menu_message(interaction, spec, render_screen(session, spec))
+
+
+async def handle_nav_settings(interaction: discord.Interaction, session: MenuSession, payload: str = None):
+    if not interaction.response.is_done():
+        await interaction.response.defer(ephemeral=True)
+
+    session.current_screen = "SETTINGS"
+    session_store.put(session.session_id, session)
+
+    content = "⚙️ **Context Engine Settings**\n\n"
+    content += "- **Full System Sync**: Pulls live Discord activity, GitHub snapshot docs, and indexes local transcripts.\n"
+    content += "- **Flush Caches**: Clears temporary AI context and pipeline caches. Run this if identity mappings or GitHub payloads appear stale.\n\n"
+
+    sync_log = session.data_context.get("sync_log")
+    if sync_log:
+        content += f"**Last Action Result:**\n```text\n{sync_log}\n```"
+
+    buttons = [
+        ButtonSpec(label="◀ Back", action="nav_main", style=discord.ButtonStyle.secondary, row=0),
+        ButtonSpec(label="🔄 Run Full System Sync", action="run_full_sync", style=discord.ButtonStyle.primary, row=1),
+        ButtonSpec(label="🗑️ Flush All Caches", action="flush_caches", style=discord.ButtonStyle.danger, row=1)
+    ]
+    spec = ScreenSpec(content=content, buttons=buttons)
+    await update_menu_message(interaction, spec, render_screen(session, spec))
+
+
+async def handle_flush_caches(interaction: discord.Interaction, session: MenuSession, payload: str = None):
+    if not interaction.response.is_done():
+        await interaction.response.defer(ephemeral=True)
+
+    cache_dir = Path(config.CACHE_DIR)
+    deleted_files = 0
+    safe_dirs = ["ui_sessions"]  # Prevents destroying the user's active UI menu
+
+    if cache_dir.exists():
+        for root, dirs, files in os.walk(cache_dir):
+            if any(safe in root for safe in safe_dirs):
+                continue
+            for file in files:
+                os.remove(os.path.join(root, file))
+                deleted_files += 1
+
+    session.data_context["sync_log"] = f"✅ Flushed {deleted_files} cached pipeline files."
+    await handle_nav_settings(interaction, session)
 
 
 async def _background_build(interaction: discord.Interaction, profile: str):
@@ -194,7 +234,6 @@ async def handle_run_full_sync(interaction: discord.Interaction, session: MenuSe
     await progress.update(0, "🟦")
 
     combined_logs = []
-
     current_month = datetime.now(timezone.utc).strftime("%Y-%m")
     discord_pulled = 0
     for chan in config.DISCORD_CHANNELS:
@@ -228,8 +267,7 @@ async def handle_run_full_sync(interaction: discord.Interaction, session: MenuSe
         final_log_str = final_log_str[:1500] + "\n...[Truncated]"
 
     session.data_context["sync_log"] = final_log_str
-    session_store.put(session.session_id, session)
-    await render_tabs(interaction, session)
+    await handle_nav_settings(interaction, session)
 
 
 async def handle_run_summarizer(interaction: discord.Interaction, session: MenuSession, payload: str | None = None):
@@ -248,13 +286,13 @@ async def handle_run_summarizer(interaction: discord.Interaction, session: MenuS
     if progress.message:
         await progress.message.edit(
             content=f"✅ Summarization pipeline complete. Generated new summaries for {count} documents.")
-    await render_tabs(interaction, session)
+    await handle_nav_bundles(interaction, session)
 
 
 async def handle_review_action(interaction: discord.Interaction, session: MenuSession, payload: str | None = None):
     queue = load_queue()
     if not queue:
-        return await render_tabs(interaction, session)
+        return await handle_nav_review(interaction, session)
 
     item = queue.pop(0)
 
@@ -287,7 +325,7 @@ async def handle_review_action(interaction: discord.Interaction, session: MenuSe
                                encoding="utf-8")
         save_queue(queue)
 
-    await render_tabs(interaction, session)
+    await handle_nav_review(interaction, session)
 
 
 class ScribeMenuCog(commands.Cog):
@@ -298,7 +336,11 @@ class ScribeMenuCog(commands.Cog):
         if not hasattr(self.bot, "menu_registry"): self.bot.menu_registry = {}
 
         self.bot.menu_registry.update({
-            "set_tab": handle_set_tab,
+            "nav_main": handle_main_screen,
+            "nav_bundles": handle_nav_bundles,
+            "nav_review": handle_nav_review,
+            "nav_settings": handle_nav_settings,
+            "flush_caches": handle_flush_caches,
             "req_bundle": handle_req_bundle,
             "run_full_sync": handle_run_full_sync,
             "run_summarizer": handle_run_summarizer,
@@ -311,10 +353,10 @@ class ScribeMenuCog(commands.Cog):
         try:
             session = MenuSession(
                 session_id=str(uuid.uuid4())[:8], bot_id="onm-scribe",
-                owner_id=interaction.user.id, filter_mode="DASHBOARD"
+                owner_id=interaction.user.id
             )
             session_store.put(session.session_id, session)
-            await render_tabs(interaction, session)
+            await handle_main_screen(interaction, session)
         except Exception as e:
             await report_error(interaction, e, "Failed to launch Scribe menu")
 
