@@ -23,7 +23,7 @@ async def _build_active_governance_map() -> str:
         prs = []
         issues = []
         for item in open_issues:
-            author_raw = item.user.login if item.user else "Unknown"
+            author_raw = item.user.login if item.user else "ghost"
             author_resolved = resolve_github_author(author_raw)
             title = escape_xml(item.title)
 
@@ -132,6 +132,7 @@ async def build_bundle(args: ContextBuildRequest, caller_name: str, lib: Context
     doc.append("</onm_context_bundle>")
 
     final_str = "\n".join(doc)
+    final_str = final_str.replace('\r\n', '\n')  # Final aggressive CRLF sanitization pass
 
     out_dir = os.path.join(config.ARTIFACTS_DIR, "bundles")
     os.makedirs(out_dir, exist_ok=True)

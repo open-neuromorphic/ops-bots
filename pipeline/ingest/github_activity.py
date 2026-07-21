@@ -43,12 +43,17 @@ async def fetch_activity(owner: str, repo: str, days_closed: int = 30) -> Activi
                 if mtime > updated_ts:
                     use_cache = True
 
+        # Invalidate legacy cache artifacts to resolve the closed-records metadata regression
         if use_cache:
-            xml_content.append(cached_path.read_text(encoding="utf-8"))
-            continue
+            cached_text = cached_path.read_text(encoding="utf-8")
+            if 'created_at=' not in cached_text or '<author>' not in cached_text:
+                use_cache = False
+            else:
+                xml_content.append(cached_text)
+                continue
 
         item_xml = []
-        author_raw = item.user.login if item.user else "Unknown"
+        author_raw = item.user.login if item.user else "ghost"
         author_resolved = resolve_github_author(author_raw)
         labels_lower = [l.name.lower() for l in item.labels]
 
@@ -69,7 +74,7 @@ async def fetch_activity(owner: str, repo: str, days_closed: int = 30) -> Activi
             comments = await get_issue_comments(owner, repo, item.number)
             item_xml.append(f'    <comments>')
             for c in comments:
-                c_author_raw = c.user.login if c.user else "Unknown"
+                c_author_raw = c.user.login if c.user else "ghost"
                 c_author_resolved = resolve_github_author(c_author_raw)
                 clean_comment = strip_boilerplate(c.body)
                 c_created_at_val = c.created_at or ""
@@ -113,7 +118,7 @@ async def fetch_activity(owner: str, repo: str, days_closed: int = 30) -> Activi
             if re.match(r"^Merge (pull request|branch)", msg):
                 continue
 
-            author_raw = c['commit']['author']['name'] if c.get('commit', {}).get('author') else 'Unknown'
+            author_raw = c['commit']['author']['name'] if c.get('commit', {}).get('author') else 'ghost'
             author_resolved = resolve_git_author(author_raw)
             sha = escape_xml(c['sha'][:7])
 

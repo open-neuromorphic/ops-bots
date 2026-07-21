@@ -16,15 +16,19 @@ def scan_and_redact(content: str) -> tuple[str, int]:
 
 def normalize_crlf(content: str) -> str:
     """Normalizes CRLF to LF to prevent hidden token bloat."""
+    if not content: return ""
     return content.replace("\r\n", "\n")
 
 def escape_xml(text: str) -> str:
     """Escapes strings for placement within standard XML attribute definitions."""
+    if not text: return ""
+    text = text.replace("\r\n", "\n")
     return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
 
 def cdata_wrap(text: str) -> str:
     """Safely encapsulates raw blocks inside an XML CDATA node."""
     if not text: return "<![CDATA[]]>"
+    text = text.replace("\r\n", "\n")
     return f"<![CDATA[\n{text.replace(']]>', ']]&gt;')}\n]]>"
 
 def strip_boilerplate(text: str) -> str:
