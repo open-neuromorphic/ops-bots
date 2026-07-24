@@ -170,15 +170,14 @@ class ONRResearchCog(commands.GroupCog, group_name="onr", group_description="ONR
         try:
             from services.arxiv import fetch_arxiv_feed, scrape_paper_license, verify_open_license
             if not arxiv_id:
-                paper = await onr_stats_store.get_async("latest_paper")
+                paper = await onr_papers_store.get_async("latest_paper")
                 if not paper:
                     papers = await fetch_and_filter_new_papers(query=config.ARXIV_CURRENT_QUERY, max_results=15,
                                                                skip_cached=False, save_to_cache=False)
                     if not papers: return await interaction.edit_original_response(
                         content="❌ No open papers found matching the query.")
                     paper = papers[0]
-                    import services.cache as c
-                    await asyncio.to_thread(c.put, "latest_paper.json", paper.model_dump_json(indent=2), "researchbot/onr_stats")
+                    await onr_papers_store.put_async("latest_paper", paper)
             else:
                 paper = await onr_papers_store.get_async(arxiv_id)
                 if not paper:

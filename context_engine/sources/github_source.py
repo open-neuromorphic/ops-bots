@@ -8,6 +8,7 @@ from context_engine.formatter import escape_xml, cdata_wrap, normalize_crlf
 
 logger = logging.getLogger(__name__)
 
+
 async def fetch_github_content(keys_str: str, mode: str, since_dt: datetime | None) -> tuple[str, int]:
     keys = keys_str.split(",") if keys_str and keys_str != "all" else None
     targets = GITHUB_REPOS
@@ -24,15 +25,22 @@ async def fetch_github_content(keys_str: str, mode: str, since_dt: datetime | No
         repo_xml = []
         days_closed = max(1, (datetime.now(timezone.utc) - since_dt).days) if since_dt else 30
 
-        repo_xml.append(f'<repository id="{repo_id}" type="{repo_type}" lookback_days="{days_closed}">')
+        repo_xml.append(f'<repository id="{repo_id}" type="{repo_type}">')
 
         if mode in ("docs", "both") and "docs" in repo_conf.modes:
             try:
                 repo_content = await fetch_markdown(repo_conf.owner, repo_conf.repo)
+                docs_xml = []
                 for path, content in repo_content.markdown_files.items():
                     content = normalize_crlf(content)
                     is_template = "template" in path.lower()
-                    repo_xml.append(f'  <document path="{escape_xml(path)}" is_template="{str(is_template).lower()}">{cdata_wrap(content)}</document>')
+                    docs_xml.append(
+                        f'      <document path="{escape_xml(path)}" is_template="{str(is_template).lower()}">{cdata_wrap(content)}</document>')
+
+                if docs_xml:
+                    repo_xml.append("  <documents>")
+                    repo_xml.extend(docs_xml)
+                    repo_xml.append("  </documents>")
             except Exception as e:
                 logger.warning(f"Error fetching docs for {repo_conf.repo}: {e}")
 

@@ -5,7 +5,10 @@ class GitHubUser(BaseModel):
     login: str
 
 class GitHubLabel(BaseModel):
+    id: Optional[int] = None
     name: str
+    color: Optional[str] = None
+    description: Optional[str] = None
 
 class GitHubIssue(BaseModel):
     number: int

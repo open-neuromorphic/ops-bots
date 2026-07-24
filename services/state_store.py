@@ -1,8 +1,10 @@
+import os
 import logging
 import asyncio
+from pathlib import Path
 from typing import TypeVar, Generic, Optional, List, Type
 from pydantic import BaseModel
-from services.cache import get as cache_get, put as cache_put, invalidate as cache_invalidate, list_keys
+import config
 
 logger = logging.getLogger(__name__)
 
@@ -14,12 +16,17 @@ class TypedStateStore(Generic[T]):
         self.model_cls = model_cls
         self.subdir = subdir
 
+    def _get_dir(self) -> Path:
+        p = Path(config.STATE_DIR) / self.subdir
+        p.mkdir(parents=True, exist_ok=True)
+        return p
+
     def _get_filename(self, key: str) -> str:
         return f"{key}.json" if not key.endswith(".json") else key
 
     def get(self, key: str) -> Optional[T]:
-        file_path = cache_get(self._get_filename(key), subdir=self.subdir)
-        if not file_path:
+        file_path = self._get_dir() / self._get_filename(key)
+        if not file_path.exists():
             return None
         try:
             return self.model_cls.model_validate_json(file_path.read_text(encoding="utf-8"))
@@ -31,22 +38,28 @@ class TypedStateStore(Generic[T]):
         return await asyncio.to_thread(self.get, key)
 
     def put(self, key: str, obj: T) -> None:
-        cache_put(self._get_filename(key), obj.model_dump_json(indent=2), subdir=self.subdir)
+        file_path = self._get_dir() / self._get_filename(key)
+        file_path.write_text(obj.model_dump_json(indent=2), encoding="utf-8")
 
     async def put_async(self, key: str, obj: T) -> None:
         await asyncio.to_thread(self.put, key, obj)
 
     def delete(self, key: str) -> None:
-        cache_invalidate(self._get_filename(key), subdir=self.subdir)
+        file_path = self._get_dir() / self._get_filename(key)
+        if file_path.exists():
+            file_path.unlink()
 
     async def delete_async(self, key: str) -> None:
         await asyncio.to_thread(self.delete, key)
 
     def list_all(self) -> List[T]:
         items = []
-        for file_name in list_keys(subdir=self.subdir):
-            if file_name.endswith(".json"):
-                key = file_name[:-5]
+        d = self._get_dir()
+        if not d.exists():
+            return items
+        for file_path in d.glob("*.json"):
+            if file_path.is_file():
+                key = file_path.name[:-5]
                 obj = self.get(key)
                 if obj:
                     items.append(obj)

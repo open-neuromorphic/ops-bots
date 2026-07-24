@@ -213,3 +213,13 @@ async def update_pr(owner: str, repo: str, pr_number: int, title: str, body: str
     async with session.patch(url, headers=headers, json=payload) as resp:
         resp.raise_for_status()
         return await resp.json()
+
+async def get_repo_labels(owner: str, repo: str) -> list[dict]:
+    """Fetches the complete schema/list of labels defined in a GitHub repository."""
+    url = f"https://api.github.com/repos/{owner}/{repo}/labels"
+    headers = _get_headers()
+    session = await get_session()
+    async with session.get(url, headers=headers) as resp:
+        if resp.status == 200:
+            return await resp.json()
+        return []

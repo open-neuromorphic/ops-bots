@@ -173,12 +173,11 @@ async def handle_flush_caches(interaction: discord.Interaction, session: MenuSes
 
     cache_dir = Path(config.CACHE_DIR)
     deleted_files = 0
-    safe_dirs = ["ui_sessions"]  # Prevents destroying the user's active UI menu
 
+    # State stores (UI Sessions, ONR Databases) have been structurally isolated to config.STATE_DIR.
+    # It is now 100% safe to unilaterally destroy everything inside CACHE_DIR.
     if cache_dir.exists():
         for root, dirs, files in os.walk(cache_dir):
-            if any(safe in root for safe in safe_dirs):
-                continue
             for file in files:
                 os.remove(os.path.join(root, file))
                 deleted_files += 1

@@ -112,6 +112,7 @@ SUMMARIES_DIR: str = os.path.join(ARTIFACTS_DIR, "summaries")
 ONR_HANDOFF_DIR: str = os.path.join(ARTIFACTS_DIR, "onr_handoffs")
 META_DIR: str = os.path.join(LIBRARY_BASE_DIR, "meta")
 CACHE_DIR: str = os.path.join(LIBRARY_BASE_DIR, "cache")
+STATE_DIR: str = os.path.join(LIBRARY_BASE_DIR, "state")
 
 FINAL_OUTPUT_DIR: str = os.path.join(LIBRARY_BASE_DIR, "google_docs")
 
