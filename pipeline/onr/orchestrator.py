@@ -241,8 +241,6 @@ async def process_state_machine(channel: discord.TextChannel) -> int:
             if now >= created_dt + timedelta(hours=config.ONR_DISCUSSION_HOURS):
                 try:
                     thread = await channel.guild.fetch_channel(state.thread_id)
-                    await thread.send("⏰ **Time is up!** Logging this discussion for the Research Registry...")
-                    await thread.edit(archived=True, locked=True)
 
                     msgs = [m async for m in thread.history(limit=None, oldest_first=True)]
                     user_msgs = [m for m in msgs if not m.author.bot]
@@ -250,25 +248,33 @@ async def process_state_machine(channel: discord.TextChannel) -> int:
                     state.participants = list(set([m.author.name for m in user_msgs]))
                     state.thread_messages = len(user_msgs)
 
-                    handoff_path, metrics, discussion_log = compile_handoff_bundle(paper, state, user_msgs)
+                    if not user_msgs:
+                        await thread.send("⏰ **Time is up!** No community discussion occurred in this thread. Archiving without review.")
+                        await thread.edit(archived=True, locked=True)
+                        state.status = "expired"
+                    else:
+                        await thread.send("⏰ **Time is up!** Logging this discussion for the Research Registry...")
+                        await thread.edit(archived=True, locked=True)
 
-                    rev_channel = discord.utils.get(channel.guild.text_channels, name=config.ONR_REVIEWERS_CHANNEL)
-                    if rev_channel:
-                        md_text = render_discussion_markdown(paper, state, metrics, discussion_log)
-                        md_file = text_to_file(md_text, f"{paper.arxiv_id}_discussion.md")
+                        handoff_path, metrics, discussion_log = compile_handoff_bundle(paper, state, user_msgs)
 
-                        await rev_channel.send(
-                            content=(
-                                f"🚨 **New ONR Handoff Ready!**\n"
-                                f"**Paper:** {paper.title}\n"
-                                f"**Engagement:** {state.thumbs_up} 🔥 | {state.thread_messages} 💬\n"
-                                f"**Projected Tier:** {'🥇' if metrics.onr_tier == 'Gold' else '🥈'} {metrics.onr_tier}\n\n"
-                                f"The {config.ONR_DISCUSSION_HOURS}-hour discussion window has closed. The thread data has been compiled and saved to disk.\n"
-                                f"*(Awaiting moderation review...)*"
-                            ),
-                            file=md_file
-                        )
-                    state.status = "completed"
+                        rev_channel = discord.utils.get(channel.guild.text_channels, name=config.ONR_REVIEWERS_CHANNEL)
+                        if rev_channel:
+                            md_text = render_discussion_markdown(paper, state, metrics, discussion_log)
+                            md_file = text_to_file(md_text, f"{paper.arxiv_id}_discussion.md")
+
+                            await rev_channel.send(
+                                content=(
+                                    f"🚨 **New ONR Handoff Ready!**\n"
+                                    f"**Paper:** {paper.title}\n"
+                                    f"**Engagement:** {state.thumbs_up} 🔥 | {state.thread_messages} 💬\n"
+                                    f"**Projected Tier:** {'🥇' if metrics.onr_tier == 'Gold' else '🥈'} {metrics.onr_tier}\n\n"
+                                    f"The {config.ONR_DISCUSSION_HOURS}-hour discussion window has closed. The thread data has been compiled and saved to disk.\n"
+                                    f"*(Awaiting moderation review...)*"
+                                ),
+                                file=md_file
+                            )
+                        state.status = "completed"
                 except discord.NotFound:
                     logger.warning(f"Thread {state.thread_id} missing, marking expired.")
                     state.status = "expired"

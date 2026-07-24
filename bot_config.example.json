@@ -34,7 +34,7 @@
     "target_channel": "research",
     "reviewers_channel": "research-review",
     "digest_channels": ["general", "research"],
-    "threshold_upvotes": 1,
+    "threshold_upvotes": 2,
     "poll_interval_hours": 4,
     "discussion_duration_hours": 24,
     "proposal_expiration_days": 7,
